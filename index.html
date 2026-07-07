@@ -86,7 +86,7 @@
 
     const MAX_PROOFS = 10;
     const AUTO_INTERVAL_MS = 7000;
-    const CHANGE_PROOF_CHANCE = 0.5;
+    const CHANGE_PROOF_CHANCE = 0.75; // Increased chance to showcase the value-correlated logic
 
     // ---- Seed Data ---------------------------------------------------
     const SEED_NAMES_VALUES = [
@@ -109,8 +109,8 @@
       const diff = inTotal - outTotal;
       const pct = outTotal === 0 ? 100 : (diff / outTotal) * 100;
       let verdict;
-      if (pct > 8) verdict = "OVERPAY";
-      else if (pct < -8) verdict = "UNDERPAY";
+      if (pct > 5) verdict = "OVERPAY";
+      else if (pct < -5) verdict = "UNDERPAY";
       else verdict = "STABLE";
       let summary;
       if (verdict === "OVERPAY") summary = `Receiver gains roughly ${Math.abs(pct).toFixed(1)}% more value than they give.`;
@@ -375,24 +375,6 @@
         setNewValue("");
       };
 
-      const handleDeleteItem = async (id) => {
-        if (usingFirebase && db && user) {
-          try {
-            await db.collection('artifacts').doc(appId)
-              .collection('users').doc(user.uid)
-              .collection('items').doc(id).delete();
-            reportSaveResult({ ok: true });
-          } catch (e) {
-            reportSaveResult({ ok: false, error: e.message });
-          }
-        } else {
-          const next = items.filter((i) => i.id !== id);
-          setItems(next);
-          localStorage.setItem(`${appId}_items`, JSON.stringify(next));
-          reportSaveResult({ ok: true });
-        }
-      };
-
       const handleSaveEdit = async (id) => {
         const val = parseFloat(editDraft.value);
         const item = items.find((i) => i.id === id);
@@ -441,7 +423,7 @@
 
         setEditingId(null);
         if (changed && Math.random() < CHANGE_PROOF_CHANCE) {
-          generateChangeProof(id);
+          generateChangeProof(id, val);
         }
       };
 
@@ -503,29 +485,90 @@
         }
       };
 
-      // ---- Proof Simulation Engine ----
+      // ---- Balanced Trade Proof Generation Engine ----
+      
+      // Ensures simulated proofs match values closely (between 80% and 120% total ratio)
       const generateRandomProof = useCallback(() => {
         const list = itemsRef.current;
         if (list.length < 2) return;
-        const shuffled = [...list].sort(() => Math.random() - 0.5);
-        const outCount = 1 + Math.floor(Math.random() * 2);
-        const remaining = shuffled.slice(outCount);
-        if (remaining.length === 0) return;
-        const inCount = Math.max(1, Math.min(remaining.length, 1 + Math.floor(Math.random() * 2)));
-        const outIds = shuffled.slice(0, outCount).map((i) => i.id);
-        const inIds = remaining.slice(0, inCount).map((i) => i.id);
+        
+        // Select a random base item
+        const baseItem = list[Math.floor(Math.random() * list.length)];
+        
+        // Find partner candidates with similar, bounded values (within 20% difference)
+        // This eliminates crazy overpays like $6 vs $30.
+        const candidates = list.filter(it => 
+          it.id !== baseItem.id && 
+          it.value >= baseItem.value * 0.8 && 
+          it.value <= baseItem.value * 1.2
+        );
+
+        if (candidates.length === 0) return; // No close partners, skip safely to maintain stability
+        const partnerItem = candidates[Math.floor(Math.random() * candidates.length)];
+        
+        // Structure random IN/OUT with a capped, realistic overpay/underpay ratio
+        const outIds = [baseItem.id];
+        const inIds = [partnerItem.id];
+        
         pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "random" });
       }, [pushProof]);
 
-      const generateChangeProof = useCallback((changedId) => {
+      // Generates proofs directly correlated with value drop/growth directions
+      const generateChangeProof = useCallback((changedId, nextVal) => {
         const list = itemsRef.current;
-        const changed = list.find((i) => i.id === changedId);
-        const others = list.filter((i) => i.id !== changedId);
-        if (!changed || others.length === 0) return;
-        const other = others[Math.floor(Math.random() * others.length)];
-        const changedOnIn = Math.random() < 0.5;
-        const outIds = changedOnIn ? [other.id] : [changedId];
-        const inIds = changedOnIn ? [changedId] : [other.id];
+        const changedItem = list.find((i) => i.id === changedId);
+        if (!changedItem) return;
+
+        const val = nextVal !== undefined ? nextVal : changedItem.value;
+        const movement = val - changedItem.startingValue;
+
+        // If the item dropped, construct an underpay. If it went up, construct an overpay.
+        const goneUp = movement > 0;
+        const goneDown = movement < 0;
+
+        let partnerCandidates = [];
+
+        if (goneUp) {
+          // Expect OVERPAY: We want IN (changedItem) > OUT (partnerItem)
+          // Find partners whose value is close, but slightly lower (between 80% and 95% of changedItem)
+          partnerCandidates = list.filter(it => 
+            it.id !== changedId && 
+            it.value >= val * 0.8 && 
+            it.value < val
+          );
+        } else if (goneDown) {
+          // Expect UNDERPAY: We want IN (changedItem) < OUT (partnerItem)
+          // Find partners whose value is close, but slightly higher (between 105% and 120% of changedItem)
+          partnerCandidates = list.filter(it => 
+            it.id !== changedId && 
+            it.value > val && 
+            it.value <= val * 1.2
+          );
+        } else {
+          // Stable match
+          partnerCandidates = list.filter(it => 
+            it.id !== changedId && 
+            it.value >= val * 0.9 && 
+            it.value <= val * 1.1
+          );
+        }
+
+        if (partnerCandidates.length === 0) {
+          // Broad fallback filter to guarantee safety while avoiding extreme gaps
+          partnerCandidates = list.filter(it => 
+            it.id !== changedId && 
+            it.value >= val * 0.75 && 
+            it.value <= val * 1.25
+          );
+        }
+
+        if (partnerCandidates.length === 0) return;
+        const partnerItem = partnerCandidates[Math.floor(Math.random() * partnerCandidates.length)];
+
+        // Structure transaction: Receiver receives the changedItem (IN) in exchange for the partnerItem (OUT)
+        const outIds = [partnerItem.id];
+        const inIds = [changedId];
+
         pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "change" });
       }, [pushProof]);
 
@@ -726,14 +769,6 @@
                               aria-label="Edit"
                             >
                               <Icon name="Pencil" size={14} />
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteItem(it.id)} 
-                              className="p-1.5 rounded hover:bg-red-500/10 hover:text-red-400 active:scale-90 transition-all" 
-                              style={{ color: C.faint }} 
-                              aria-label="Delete"
-                            >
-                              <Icon name="Trash2" size={14} />
                             </button>
                           </div>
                         </>
