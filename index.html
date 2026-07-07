@@ -145,7 +145,8 @@
         Zap: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />,
         Database: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
         Search: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />,
-        ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+        ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />,
+        TrendingRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
       };
 
       return (
@@ -154,6 +155,128 @@
         </svg>
       );
     };
+
+    // ---- Native SVG Interactive Line Graph Component ---------------------
+    function ValuationGraph({ history, colorTheme }) {
+      if (!history || history.length < 2) {
+        return (
+          <div className="flex flex-col items-center justify-center p-6 border border-[#2A2F39] rounded-xl bg-[#111318]/50 text-center">
+            <span className="text-xs text-[#565C68] font-mono-custom font-semibold">Flat Value Threshold</span>
+            <span className="text-[10px] text-white/30 max-w-[280px] mt-1">
+              No historical price modifications on ledger database yet. Modify this item's price to begin plotting.
+            </span>
+          </div>
+        );
+      }
+
+      const padding = 16;
+      const width = 500;
+      const height = 140;
+      const chartWidth = width - padding * 2;
+      const chartHeight = height - padding * 2;
+
+      const values = history.map(h => h.value);
+      const minVal = Math.min(...values);
+      const maxVal = Math.max(...values);
+      const valRange = maxVal - minVal === 0 ? 1 : maxVal - minVal;
+
+      // Map mathematical data into responsive coordinate points
+      const points = history.map((p, idx) => {
+        const x = padding + (idx / (history.length - 1)) * chartWidth;
+        const y = padding + chartHeight - ((p.value - minVal) / valRange) * chartHeight;
+        return { x, y, value: p.value, date: p.date };
+      });
+
+      // SVG path computations
+      const linePath = points.reduce((acc, p, idx) => {
+        return acc + (idx === 0 ? `M ${p.x} ${p.y}` : ` L ${p.x} ${p.y}`);
+      }, "");
+
+      const areaPath = points.length > 0 
+        ? `${linePath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`
+        : "";
+
+      return (
+        <div className="bg-[#111318]/70 border border-[#2A2F39] rounded-xl p-4 mt-2 relative overflow-hidden animate-fadeIn">
+          <div className="text-[10px] font-mono-custom text-emerald-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Valuation swing-graph
+          </div>
+
+          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-32 overflow-visible">
+            <defs>
+              <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={colorTheme} stopOpacity="0.3"/>
+                <stop offset="100%" stopColor={colorTheme} stopOpacity="0"/>
+              </linearGradient>
+            </defs>
+
+            {/* Horizontal Grid lines */}
+            <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="#2A2F39" strokeWidth="0.75" strokeDasharray="3,3" />
+            <line x1={padding} y1={padding + chartHeight / 2} x2={width - padding} y2={padding + chartHeight / 2} stroke="#2A2F39" strokeWidth="0.75" strokeDasharray="3,3" />
+            <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#2A2F39" strokeWidth="1" />
+
+            {/* Shaded Area Fill */}
+            <path d={areaPath} fill="url(#chartGradient)" className="transition-all duration-300" />
+
+            {/* Dynamic Line Stroke */}
+            <path 
+              d={linePath} 
+              fill="none" 
+              stroke={colorTheme} 
+              strokeWidth="2.5" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              className="transition-all duration-300"
+            />
+
+            {/* Circular Data Markers with hover-sensitive Tooltips */}
+            {points.map((p, idx) => (
+              <g key={idx} className="group cursor-pointer">
+                <circle 
+                  cx={p.x} 
+                  cy={p.y} 
+                  r="4" 
+                  fill="#111318" 
+                  stroke={colorTheme} 
+                  strokeWidth="2.5" 
+                  className="transition-all duration-150 group-hover:r-5 group-hover:fill-white" 
+                />
+                
+                {/* Tooltip background card */}
+                <rect 
+                  x={p.x - 30} 
+                  y={p.y - 28} 
+                  width="60" 
+                  height="18" 
+                  rx="4" 
+                  fill="#1F232B" 
+                  stroke="#2A2F39" 
+                  strokeWidth="1" 
+                  className="hidden group-hover:block transition-all" 
+                />
+                
+                {/* Tooltip dynamic valuation text */}
+                <text 
+                  x={p.x} 
+                  y={p.y - 15} 
+                  textAnchor="middle" 
+                  className="hidden group-hover:block font-mono-custom fill-[#EDEEF0] text-[9px] font-bold"
+                >
+                  {fmt(p.value)}
+                </text>
+              </g>
+            ))}
+          </svg>
+
+          {/* Time axis bounds */}
+          <div className="flex justify-between text-[9px] text-[#565C68] font-mono-custom mt-2 pt-1.5 border-t border-white/5">
+            <span>START: {new Date(history[0].date).toLocaleDateString()}</span>
+            <span>LIVE RECORDING</span>
+          </div>
+        </div>
+      );
+    }
 
     // ---- Main Component --------------------------------------------------
     function ValueLedger() {
@@ -176,6 +299,7 @@
       
       // tracks if search query was triggered from a pet click in the proof list
       const [referredFromProofs, setReferredFromProofs] = useState(false);
+      const [expandedItemId, setExpandedItemId] = useState(null); // tracking list expandable items
 
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
@@ -195,7 +319,6 @@
           if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             const firebaseConfig = JSON.parse(__firebase_config);
             
-            // Check if firebase app is already initialized to avoid re-init crashes
             let app;
             if (window.firebase.apps.length === 0) {
               app = window.firebase.initializeApp(firebaseConfig);
@@ -213,7 +336,6 @@
           console.warn("Firebase config could not be processed. Switching to Offline Cache.", e);
         }
 
-        // Offline / Local Storage fallback setup (Runs if Firebase isn't configured)
         if (!initializedAuth || !initializedDb) {
           const localItems = localStorage.getItem(`${appId}_items`);
           const localProofs = localStorage.getItem(`${appId}_proofs`);
@@ -273,7 +395,6 @@
           });
           
           if (loaded.length === 0) {
-            // Seed base items into Cloud database
             SEED_ITEMS.forEach(async (item) => {
               await baseUserRef.collection('items').doc(item.id).set({
                 name: item.name,
@@ -290,7 +411,7 @@
           setSaveStatus({ ok: false, error: "Realtime items load failed" });
         });
 
-        // Sync Proofs - No maximum amount limits in DB
+        // Sync Proofs
         const unsubProofs = baseUserRef.collection('proofs').onSnapshot((snapshot) => {
           const loaded = [];
           snapshot.forEach((doc) => {
@@ -313,7 +434,7 @@
           console.error("Firebase Changes subscription error:", err);
         });
 
-        // Sync auto-simulation setting
+        // Sync settings
         const unsubSettings = baseUserRef.collection('settings').doc('auto-running').onSnapshot((docSnap) => {
           if (docSnap.exists) {
             setAutoRunning(docSnap.data().value);
@@ -332,7 +453,6 @@
         };
       }, [user, db]);
 
-      // Feed UI notifications
       const reportSaveResult = useCallback((result) => {
         const ts = Date.now();
         setSaveStatus({ ...result, ts });
@@ -343,7 +463,7 @@
         }
       }, []);
 
-      // Persist Operations (Dynamic storage fallback)
+      // Persist Operations
       const handleAddItem = async () => {
         const val = parseFloat(newValue);
         if (!newName.trim() || isNaN(val)) return;
@@ -426,7 +546,6 @@
         }
       };
 
-      // Push proofs - removed MAX_PROOFS truncation on database save
       const pushProof = useCallback(async (proof) => {
         if (usingFirebase && db && user) {
           try {
@@ -586,7 +705,8 @@
         return () => clearInterval(id);
       }, [autoRunning, generateRandomProof]);
 
-      const startEdit = (it) => {
+      const startEdit = (e, it) => {
+        e.stopPropagation(); // prevent collapsing/expanding row triggers
         setEditingId(it.id);
         setEditDraft({ name: it.name, value: String(it.value) });
       };
@@ -596,6 +716,12 @@
         setSearchQuery(itemName);
         setReferredFromProofs(true);
         setView("ledger");
+
+        // Automatically find target item, expand it, and show graph
+        const target = items.find(it => it.name.toLowerCase() === itemName.toLowerCase());
+        if (target) {
+          setExpandedItemId(target.id);
+        }
       };
 
       // Reset filter context when going back
@@ -608,7 +734,6 @@
       // Safe Tab Route Changes
       const handleTabChange = (tabKey) => {
         setView(tabKey);
-        // Clear reference flag if user manually clicks away
         if (tabKey !== "ledger") {
           setReferredFromProofs(false);
         }
@@ -625,7 +750,7 @@
         );
       }, [sortedItems, searchQuery]);
 
-      // 5 of the oldest proofs are displayed (Sort ascending by chronological creation time, then slice)
+      // 5 of the oldest proofs are displayed
       const oldestProofsDisplayed = useMemo(() => {
         return [...proofs]
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
@@ -641,6 +766,39 @@
           })
           .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
       }, [items]);
+
+      // Construct price history list for the selected/expanded item dynamically
+      const getItemValuationHistory = useCallback((itemId) => {
+        const item = itemsById[itemId];
+        if (!item) return [];
+
+        // filter changes chronologically oldest first
+        const logs = [...changeLog]
+          .filter(l => l.itemId === itemId)
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        const history = [];
+        
+        // Push initial point
+        const initialDate = logs.length > 0 
+          ? new Date(new Date(logs[0].timestamp).getTime() - (3600000 * 24)).toISOString() 
+          : new Date(Date.now() - (3600000 * 24)).toISOString();
+
+        history.push({
+          value: item.startingValue,
+          date: initialDate
+        });
+
+        // Push subsequent valuation edits
+        logs.forEach(log => {
+          history.push({
+            value: log.newValue,
+            date: log.timestamp
+          });
+        });
+
+        return history;
+      }, [changeLog, itemsById]);
 
       if (!ready) {
         return (
@@ -724,7 +882,7 @@
                 {referredFromProofs && (
                   <button 
                     onClick={handleBackToProofs}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all self-start border animate-fadeIn hover:bg-emerald-500/15"
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all self-start border animate-fadeIn hover:bg-emerald-500/15"
                     style={{ background: `${C.greenDim}40`, color: C.green, borderColor: `${C.green}30` }}
                   >
                     <Icon name="ArrowLeft" size={12} />
@@ -780,6 +938,7 @@
                         onClick={() => {
                           setSearchQuery("");
                           setReferredFromProofs(false);
+                          setExpandedItemId(null);
                         }}
                         className="text-white/40 hover:text-white transition-all p-1 text-xs"
                       >
@@ -797,73 +956,98 @@
                     </div>
                   ) : (
                     <div className="divide-y" style={{ divideColor: C.line }}>
-                      {filteredItems.map((it, idx) => (
-                        <div 
-                          key={it.id} 
-                          className="flex items-center gap-3 px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129]" 
-                          style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
-                        >
-                          {editingId === it.id ? (
-                            <>
-                              <input 
-                                value={editDraft.name} 
-                                onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
-                                className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none text-[#EDEEF0]"
-                                style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
-                              />
-                              <input 
-                                value={editDraft.value} 
-                                onChange={(e) => setEditDraft((d) => ({ ...d, value: e.target.value }))} 
-                                inputMode="numeric"
-                                className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom text-[#EDEEF0]"
-                                style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
-                                onKeyDown={(e) => e.key === "Enter" && handleSaveEdit(it.id)} 
-                              />
-                              <button 
-                                onClick={() => handleSaveEdit(it.id)} 
-                                className="hover:scale-110 active:scale-90 transition-all p-1.5 text-emerald-400" 
-                                aria-label="Save"
-                              >
-                                <Icon name="Check" size={18} />
-                              </button>
-                              <button 
-                                onClick={() => setEditingId(null)} 
-                                className="hover:scale-110 active:scale-90 transition-all p-1.5" 
-                                style={{ color: C.faint }} 
-                                aria-label="Cancel"
-                              >
-                                <Icon name="X" size={18} />
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex-1 min-w-0">
-                                <div className="truncate text-sm font-medium" style={{ color: C.text }}>
-                                  {it.name}
+                      {filteredItems.map((it, idx) => {
+                        const isExpanded = expandedItemId === it.id;
+                        const deltaVal = it.value - it.startingValue;
+                        const goingUp = deltaVal > 0;
+                        const themeColor = deltaVal > 0 ? C.green : deltaVal < 0 ? C.red : C.amber;
+                        
+                        return (
+                          <div 
+                            key={it.id} 
+                            onClick={() => setExpandedItemId(isExpanded ? null : it.id)}
+                            className="flex flex-col px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129] cursor-pointer" 
+                            style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
+                          >
+                            <div className="flex items-center gap-3 w-full">
+                              {editingId === it.id ? (
+                                <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
+                                  <input 
+                                    value={editDraft.name} 
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
+                                    className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none text-[#EDEEF0]"
+                                    style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
+                                  />
+                                  <input 
+                                    value={editDraft.value} 
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, value: e.target.value }))} 
+                                    inputMode="numeric"
+                                    className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom text-[#EDEEF0]"
+                                    style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
+                                    onKeyDown={(e) => e.key === "Enter" && handleSaveEdit(it.id)} 
+                                  />
+                                  <button 
+                                    onClick={() => handleSaveEdit(it.id)} 
+                                    className="hover:scale-110 active:scale-90 transition-all p-1.5 text-emerald-400" 
+                                    aria-label="Save"
+                                  >
+                                    <Icon name="Check" size={18} />
+                                  </button>
+                                  <button 
+                                    onClick={() => setEditingId(null)} 
+                                    className="hover:scale-110 active:scale-90 transition-all p-1.5" 
+                                    style={{ color: C.faint }} 
+                                    aria-label="Cancel"
+                                  >
+                                    <Icon name="X" size={18} />
+                                  </button>
                                 </div>
-                                {it.value !== it.startingValue && (
-                                  <div className="text-[10px] mt-0.5 font-mono-custom" style={{ color: C.faint }}>
-                                    Started @ {fmt(it.startingValue)}
+                              ) : (
+                                <>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="truncate text-sm font-semibold flex items-center gap-2" style={{ color: C.text }}>
+                                      {it.name}
+                                      {isExpanded && (
+                                        <span className="text-[9px] font-mono-custom px-1.5 py-0.5 rounded bg-white/5 font-normal text-white/50">
+                                          INSIGHT OPEN
+                                        </span>
+                                      )}
+                                    </div>
+                                    {it.value !== it.startingValue && (
+                                      <div className="text-[10px] mt-0.5 font-mono-custom" style={{ color: C.faint }}>
+                                        Started @ {fmt(it.startingValue)}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                  <span className="text-sm font-bold font-mono-custom" style={{ color: C.muted }}>
+                                    {fmt(it.value)}
+                                  </span>
+                                  
+                                  <div className="flex items-center gap-1.5 ml-2">
+                                    <button 
+                                      onClick={(e) => startEdit(e, it)} 
+                                      className="p-1.5 rounded hover:bg-white/5 active:scale-90 transition-all text-white/40 hover:text-white" 
+                                      aria-label="Edit"
+                                    >
+                                      <Icon name="Pencil" size={14} />
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            {/* Line Graph panel rendered when expanded */}
+                            {isExpanded && editingId !== it.id && (
+                              <div onClick={(e) => e.stopPropagation()} className="mt-3">
+                                <ValuationGraph 
+                                  history={getItemValuationHistory(it.id)} 
+                                  colorTheme={themeColor}
+                                />
                               </div>
-                              <span className="text-sm font-semibold font-mono-custom" style={{ color: C.muted }}>
-                                {fmt(it.value)}
-                              </span>
-                              
-                              <div className="flex items-center gap-1.5 ml-2">
-                                <button 
-                                  onClick={() => startEdit(it)} 
-                                  className="p-1.5 rounded hover:bg-white/5 active:scale-90 transition-all text-white/40 hover:text-white" 
-                                  aria-label="Edit"
-                                >
-                                  <Icon name="Pencil" size={14} />
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ))}
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -972,7 +1156,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2 py-1 rounded transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
@@ -990,7 +1174,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2 py-1 rounded transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
