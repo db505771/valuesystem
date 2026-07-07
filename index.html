@@ -523,21 +523,16 @@
         const changed = item && !isNaN(val) && val !== item.value;
         const targetName = editDraft.name.trim() || item.name;
 
-        // Auto-trends on change based on price drops or rises
+        // Base trend is initially what the user selected in the dropdown
         let targetTrend = editDraft.trend;
-        if (changed) {
+
+        // Auto-trends calculation ONLY if user left the select trend matching original item trend
+        if (changed && editDraft.trend === item.trend) {
           if (val > item.value) {
-            // Pivot check: if it was dropping, trigger transitional sentiment sequence
             targetTrend = item.trend === TRENDS.DROPPING ? TRENDS.DROPPING_SHOULD_RISE : TRENDS.RISING;
           } else if (val < item.value) {
-            // Pivot check: if it was rising, trigger transitional sentiment sequence
             targetTrend = item.trend === TRENDS.RISING ? TRENDS.RISING_SHOULD_DROP : TRENDS.DROPPING;
           }
-        }
-
-        // Auto-crash safeguard if a pet rises way too much
-        if (val > item.startingValue * 1.8) {
-          targetTrend = TRENDS.CRASHED;
         }
 
         if (usingFirebase && db && user) {
@@ -696,19 +691,17 @@
         if (list.length < 4) return;
 
         // Stage 1: Generate Equal Trade (STABLE) Proof
-        // Owner gives: baseItem (pivot item) + companionItem in OUT
         const outIds = [baseItem.id, companionItem.id];
         const outTotal = baseItem.value + companionItem.value;
 
-        // Equal Trade: IN value matches OUT value close to 1.0 ratio
         const equalOutItems = selectBundle(list, outIds, outTotal, 1, 2);
         if (equalOutItems.length > 0) {
           const equalInIds = equalOutItems.map(it => it.id);
           await pushProof({
             id: uid(),
             timestamp: new Date().toISOString(),
-            outIds: outIds, // Gives base item
-            inIds: equalInIds, // Gets equal value items
+            outIds: outIds, 
+            inIds: equalInIds, 
             sourceType: "change"
           });
         }
@@ -740,7 +733,7 @@
             const actionInIds = actionInItems.map(it => it.id);
             await pushProof({
               id: uid(),
-              timestamp: new Date(Date.now() + 1000).toISOString(), // ordering in list
+              timestamp: new Date(Date.now() + 1000).toISOString(), 
               outIds: freshOutIds,
               inIds: actionInIds,
               sourceType: "change"
@@ -779,19 +772,18 @@
         }
 
         // Standard direct trade structures
-        // Side OUT gives baseItem (rising/dropping/stable) + companionItem
         const outIds = [baseItem.id, companionItem.id];
         const outTotal = baseItem.value + companionItem.value;
 
-        let targetRatio = 1.0; // IN_total / OUT_total ratio
+        let targetRatio = 1.0; 
         if (trend === TRENDS.RISING) {
-          // Overpay: Receives higher total value (IN > OUT, ratio: 1.06 to 1.22)
+          // Overpay: Receives higher total value (IN > OUT)
           targetRatio = 1.06 + Math.random() * 0.16;
         } else if (trend === TRENDS.DROPPING || trend === TRENDS.CRASHED) {
-          // Underpay: Receives lesser total value (IN < OUT, ratio: 0.78 to 0.94)
+          // Underpay: Receives lesser total value (IN < OUT)
           targetRatio = 0.78 + Math.random() * 0.16;
         } else {
-          targetRatio = 0.96 + Math.random() * 0.08; // Stable trade
+          targetRatio = 0.96 + Math.random() * 0.08; 
         }
 
         const targetInValue = outTotal * targetRatio;
@@ -829,19 +821,15 @@
           return;
         }
 
-        // Side OUT contains changedItem + companionItem
         const outIds = [changedItem.id, companionItem.id];
         const outTotal = val + companionItem.value;
 
         let targetRatio = 1.0;
         if (trend === TRENDS.RISING) {
-          // Overpay: gets higher value in return
           targetRatio = 1.06 + Math.random() * 0.16;
         } else if (trend === TRENDS.DROPPING) {
-          // Underpay: gets less value than giving
           targetRatio = 0.78 + Math.random() * 0.10;
         } else if (trend === TRENDS.CRASHED) {
-          // Crashed: major underpay loss
           targetRatio = 0.70 + Math.random() * 0.10;
         } else {
           targetRatio = 0.96 + Math.random() * 0.08;
@@ -956,19 +944,17 @@
       const renderTrendBadge = (trend) => {
         switch (trend) {
           case TRENDS.RISING:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Rising</span>;
-          case TRENDS.SHOULD_RISE:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-emerald-500/40 text-emerald-300">Should Rise</span>;
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Rising</span>;
           case TRENDS.DROPPING:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">Dropping</span>;
-          case TRENDS.SHOULD_DROP:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-red-500/40 text-red-300">Should Drop</span>;
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">Dropping</span>;
+          case TRENDS.RISING_SHOULD_DROP:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400 border border-orange-500/20">Rising, Should Drop</span>;
+          case TRENDS.DROPPING_SHOULD_RISE:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Dropping, Should Rise</span>;
           case TRENDS.CRASHED:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/30 animate-pulse font-mono-custom">Crashed</span>;
-          case TRENDS.SHOULD_STABLE:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-gray-500/40 text-gray-300">Should Stable</span>;
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#3b2226] text-[#F2545B] border border-red-500/20 animate-pulse font-mono-custom">Crashed</span>;
           default:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20">Stable</span>;
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20">Stable</span>;
         }
       };
 
@@ -996,7 +982,7 @@
           <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col gap-6">
             
             {/* Header section */}
-            <div className="flex_items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39] flex">
+            <div className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39] flex">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] tracking-[0.25em] uppercase" style={{ color: C.faint }}>
@@ -1201,7 +1187,7 @@
                                         <span>Started @ {fmt(it.startingValue)}</span>
                                         {isCrashed && (
                                           <span className="text-red-400 font-bold flex items-center gap-0.5">
-                                            <Icon name="AlertTriangle" size={10} /> Value Over-Inflated!
+                                            <Icon name="AlertTriangle" size={10} /> Market Crashed!
                                           </span>
                                         )}
                                       </div>
@@ -1266,7 +1252,7 @@
                   </div>
                   <span className="text-[11px] text-center" style={{ color: C.faint }}>
                     {autoRunning 
-                      ? `Simulator generating smart multi-item trend-balanced proofs every ${AUTO_INTERVAL_MS / 1000} seconds.` 
+                      ? `Simulator generating smart multi-item trade proofs every ${AUTO_INTERVAL_MS / 1000} seconds.` 
                       : `Simulation systems operational. Activate Loop Engine to automatically build live proof records.`
                     }
                   </span>
@@ -1338,13 +1324,13 @@
                             <div style={{ color: C.faint }} className="mb-1.5 font-mono-custom uppercase tracking-wider text-[10px]">
                               OUTGOING · {fmt(outTotal)}
                             </div>
-                            <div className="space-y-1 max-h-[100px] overflow-y-auto">
+                            <div className="space-y-1.5 max-h-[120px] overflow-y-auto">
                               {outItems.map((it) => (
                                 <button 
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
+                                  className="w-full text-left truncate px-2.5 py-1.5 rounded-xl bg-white/5 text-gray-300 hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
@@ -1356,13 +1342,13 @@
                             <div style={{ color: C.faint }} className="mb-1.5 font-mono-custom uppercase tracking-wider text-[10px]">
                               INCOMING · {fmt(inTotal)}
                             </div>
-                            <div className="space-y-1 max-h-[100px] overflow-y-auto">
+                            <div className="space-y-1.5 max-h-[120px] overflow-y-auto">
                               {inItems.map((it) => (
                                 <button 
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
+                                  className="w-full text-left truncate px-2.5 py-1.5 rounded-xl bg-white/5 text-gray-300 hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
