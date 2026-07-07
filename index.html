@@ -8,15 +8,15 @@
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Import Map for React and Libraries -->
-  <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0?dev",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev"
-      }
-    }
-  </script>
+  <!-- Bulletproof React & ReactDOM CDNs -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Bulletproof Firebase Compat CDNs (No ESM imports, avoids GitHub Pages CORS issues) -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
@@ -49,15 +49,23 @@
   </style>
 </head>
 <body>
-  <div id="root"></div>
+  <!-- Screen mounting target -->
+  <div id="root">
+    <!-- Friendly Loading placeholder while Babel compiles the bundle -->
+    <div class="min-h-screen flex flex-col items-center justify-center bg-[#111318]">
+      <span class="text-sm tracking-widest uppercase text-[#868C99] font-mono-custom animate-pulse mb-2">
+        Booting Ledger Interface...
+      </span>
+      <div class="w-16 h-1 rounded-full bg-[#3ECF8E] overflow-hidden relative">
+        <div class="absolute top-0 left-0 h-full w-1/2 bg-white rounded-full animate-ping"></div>
+      </div>
+    </div>
+  </div>
 
-  <!-- Firebase & App Script -->
-  <script type="module">
-    import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-    import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-    import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+  <!-- App Script compiled via Babel on-the-fly -->
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
+    const { createRoot } = ReactDOM;
 
     // ---- Design Tokens ---------------------------------------------------
     const C = {
@@ -118,7 +126,7 @@
       return { color: C.muted, dim: C.panel2 };
     }
 
-    // ---- Beautiful SVG Icons -------------------------------------------------
+    // ---- Inline SVG Icons -------------------------------------------------
     const Icon = ({ name, size = 16, className = "" }) => {
       const paths = {
         Plus: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 5v14m-7-7h14" />,
@@ -171,26 +179,41 @@
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
 
-      // Initialize Firebase Configuration
+      // Access Global Variables safely
       const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-      let db = null;
-      let auth = null;
+      
+      // Setup Firebase Compatibility references safely
+      const [db, setDb] = useState(null);
+      const [auth, setAuth] = useState(null);
 
-      try {
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-          const firebaseConfig = JSON.parse(__firebase_config);
-          const app = initializeApp(firebaseConfig);
-          auth = getAuth(app);
-          db = getFirestore(app);
-        }
-      } catch (e) {
-        console.warn("Firebase not loaded/configured; falling back to local memory storage mode.", e);
-      }
-
-      // Handle Authentication (RULE 3)
       useEffect(() => {
-        if (!auth) {
-          // Dynamic Local Mode fallback
+        let initializedDb = null;
+        let initializedAuth = null;
+
+        try {
+          if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            
+            // Check if firebase app is already initialized to avoid re-init crashes
+            let app;
+            if (window.firebase.apps.length === 0) {
+              app = window.firebase.initializeApp(firebaseConfig);
+            } else {
+              app = window.firebase.app();
+            }
+            
+            initializedAuth = app.auth();
+            initializedDb = app.firestore();
+            
+            setAuth(initializedAuth);
+            setDb(initializedDb);
+          }
+        } catch (e) {
+          console.warn("Firebase config could not be processed. Switching to Offline Cache.", e);
+        }
+
+        // Offline / Local Storage fallback setup (Runs if Firebase isn't configured)
+        if (!initializedAuth || !initializedDb) {
           const localItems = localStorage.getItem(`${appId}_items`);
           const localProofs = localStorage.getItem(`${appId}_proofs`);
           const localChanges = localStorage.getItem(`${appId}_changes`);
@@ -201,19 +224,23 @@
           setChangeLog(localChanges ? JSON.parse(localChanges) : []);
           setAutoRunning(localAuto ? JSON.parse(localAuto) : false);
           setReady(true);
-          return;
         }
+      }, []);
+
+      // Handle Authentication if Firebase exists (RULE 3)
+      useEffect(() => {
+        if (!auth || !db) return;
 
         const initAuth = async () => {
           try {
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-              await signInWithCustomToken(auth, __initial_auth_token);
+              await auth.signInWithCustomToken(__initial_auth_token);
             } else {
-              await signInAnonymously(auth);
+              await auth.signInAnonymously();
             }
             setUsingFirebase(true);
           } catch (e) {
-            console.error("Auth sign-in failed. Falling back to local state.", e);
+            console.error("Auth sign-in failed. Defaulting to local memory.", e);
             setUsingFirebase(false);
             setItems(SEED_ITEMS);
             setReady(true);
@@ -221,30 +248,33 @@
         };
 
         initAuth();
-        const unsubscribe = onAuthStateChanged(auth, (usr) => {
+
+        const unsubscribe = auth.onAuthStateChanged((usr) => {
           setUser(usr);
           if (!usr) {
             setUsingFirebase(false);
           }
         });
         return () => unsubscribe();
-      }, []);
+      }, [auth, db]);
 
       // Realtime Data Sync from Firestore (RULES 1, 2, 3)
       useEffect(() => {
         if (!user || !db) return;
 
+        const baseUserRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid);
+
         // Sync Items
-        const itemsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'items');
-        const unsubItems = onSnapshot(itemsCol, (snapshot) => {
+        const unsubItems = baseUserRef.collection('items').onSnapshot((snapshot) => {
           const loaded = [];
           snapshot.forEach((doc) => {
             loaded.push({ id: doc.id, ...doc.data() });
           });
+          
           if (loaded.length === 0) {
-            // Seed collection in Firebase
+            // Seed base items into Cloud database
             SEED_ITEMS.forEach(async (item) => {
-              await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', item.id), {
+              await baseUserRef.collection('items').doc(item.id).set({
                 name: item.name,
                 startingValue: item.startingValue,
                 value: item.value
@@ -255,26 +285,25 @@
           }
           setReady(true);
         }, (err) => {
-          console.error("Firebase Items Subscription Error:", err);
+          console.error("Firebase Items sync error:", err);
           setSaveStatus({ ok: false, error: "Realtime items load failed" });
         });
 
-        // Sync Proofs
-        const proofsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'proofs');
-        const unsubProofs = onSnapshot(proofsCol, (snapshot) => {
+        // Sync Proofs (Limited inside logic to keep code simple and avoid Rule 2 compound index requirements)
+        const unsubProofs = baseUserRef.collection('proofs').onSnapshot((snapshot) => {
           const loaded = [];
           snapshot.forEach((doc) => {
             loaded.push({ id: doc.id, ...doc.data() });
           });
+          // Perform UI sorting directly in JavaScript memory
           loaded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
           setProofs(loaded.slice(0, MAX_PROOFS));
         }, (err) => {
-          console.error("Firebase Proofs Subscription Error:", err);
+          console.error("Firebase Proofs subscription error:", err);
         });
 
-        // Sync Changes log
-        const changesCol = collection(db, 'artifacts', appId, 'users', user.uid, 'changes');
-        const unsubChanges = onSnapshot(changesCol, (snapshot) => {
+        // Sync Value Change logs
+        const unsubChanges = baseUserRef.collection('changes').onSnapshot((snapshot) => {
           const loaded = [];
           snapshot.forEach((doc) => {
             loaded.push({ id: doc.id, ...doc.data() });
@@ -282,19 +311,18 @@
           loaded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
           setChangeLog(loaded);
         }, (err) => {
-          console.error("Firebase Changes Subscription Error:", err);
+          console.error("Firebase Changes subscription error:", err);
         });
 
-        // Sync settings
-        const settingsDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'auto-running');
-        const unsubSettings = onSnapshot(settingsDoc, (docSnap) => {
-          if (docSnap.exists()) {
+        // Sync auto-simulation setting
+        const unsubSettings = baseUserRef.collection('settings').doc('auto-running').onSnapshot((docSnap) => {
+          if (docSnap.exists) {
             setAutoRunning(docSnap.data().value);
           } else {
             setAutoRunning(false);
           }
         }, (err) => {
-          console.error("Firebase Settings Subscription Error:", err);
+          console.error("Firebase Settings subscription error:", err);
         });
 
         return () => {
@@ -303,9 +331,9 @@
           unsubChanges();
           unsubSettings();
         };
-      }, [user]);
+      }, [user, db]);
 
-      // Report UI feedback on success/failure
+      // Feed UI notifications
       const reportSaveResult = useCallback((result) => {
         const ts = Date.now();
         setSaveStatus({ ...result, ts });
@@ -316,7 +344,7 @@
         }
       }, []);
 
-      // Persist Operations (Firestore with Rule-Compliant Local Fallback)
+      // Persist Operations (Dynamic storage fallback)
       const handleAddItem = async () => {
         const val = parseFloat(newValue);
         if (!newName.trim() || isNaN(val)) return;
@@ -326,17 +354,18 @@
 
         if (usingFirebase && db && user) {
           try {
-            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', newId), {
-              name: payload.name,
-              startingValue: payload.startingValue,
-              value: payload.value
-            });
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('items').doc(newId).set({
+                name: payload.name,
+                startingValue: payload.startingValue,
+                value: payload.value
+              });
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
           }
         } else {
-          // Local fallback
           const next = [...items, payload];
           setItems(next);
           localStorage.setItem(`${appId}_items`, JSON.stringify(next));
@@ -349,7 +378,9 @@
       const handleDeleteItem = async (id) => {
         if (usingFirebase && db && user) {
           try {
-            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', id));
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('items').doc(id).delete();
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
@@ -372,24 +403,27 @@
           try {
             if (changed) {
               const changeId = uid();
-              await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'changes', changeId), {
-                itemId: id,
-                itemName: targetName,
-                oldValue: item.value,
-                newValue: val,
-                timestamp: new Date().toISOString()
-              });
+              await db.collection('artifacts').doc(appId)
+                .collection('users').doc(user.uid)
+                .collection('changes').doc(changeId).set({
+                  itemId: id,
+                  itemName: targetName,
+                  oldValue: item.value,
+                  newValue: val,
+                  timestamp: new Date().toISOString()
+                });
             }
-            await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', id), {
-              name: targetName,
-              value: isNaN(val) ? item.value : val
-            });
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('items').doc(id).update({
+                name: targetName,
+                value: isNaN(val) ? item.value : val
+              });
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
           }
         } else {
-          // Local storage updates
           let updatedChanges = changeLog;
           if (changed) {
             updatedChanges = [
@@ -414,7 +448,9 @@
       const pushProof = useCallback(async (proof) => {
         if (usingFirebase && db && user) {
           try {
-            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'proofs', proof.id), proof);
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('proofs').doc(proof.id).set(proof);
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
@@ -427,12 +463,14 @@
           });
           reportSaveResult({ ok: true });
         }
-      }, [usingFirebase, user, reportSaveResult]);
+      }, [usingFirebase, db, user, reportSaveResult]);
 
       const handleDeleteProof = async (id) => {
         if (usingFirebase && db && user) {
           try {
-            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'proofs', id));
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('proofs').doc(id).delete();
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
@@ -451,7 +489,9 @@
         const next = !autoRunning;
         if (usingFirebase && db && user) {
           try {
-            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'auto-running'), { value: next });
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('settings').doc('auto-running').set({ value: next });
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
@@ -463,7 +503,7 @@
         }
       };
 
-      // ---- Proof Generation Logic ----
+      // ---- Proof Simulation Engine ----
       const generateRandomProof = useCallback(() => {
         const list = itemsRef.current;
         if (list.length < 2) return;
@@ -489,7 +529,7 @@
         pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "change" });
       }, [pushProof]);
 
-      // Auto-running loops
+      // Simulation loop trigger
       useEffect(() => {
         if (!autoRunning) return;
         const id = setInterval(generateRandomProof, AUTO_INTERVAL_MS);
@@ -537,7 +577,7 @@
         <div style={{ background: C.bg }} className="min-h-screen w-full relative">
           <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col gap-6">
             
-            {/* Header section with real-time sync status indicator */}
+            {/* Header section */}
             <div className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39]">
               <div>
                 <div className="flex items-center gap-2">
@@ -572,7 +612,7 @@
               </div>
             </div>
 
-            {/* Sync Notifications */}
+            {/* Sync Status Notifications */}
             {saveStatus && (
               <div className="transition-all duration-300">
                 {saveStatus.ok ? (
@@ -596,7 +636,7 @@
                     value={newName} 
                     onChange={(e) => setNewName(e.target.value)} 
                     placeholder="New Item Name"
-                    className="flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm outline-none transition-all duration-200 focus:border-emerald-500/50"
+                    className="flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm outline-none transition-all duration-200 focus:border-emerald-500/50 text-[#EDEEF0]"
                     style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
                   />
                   <input 
@@ -604,7 +644,7 @@
                     onChange={(e) => setNewValue(e.target.value)} 
                     placeholder="Starting Value" 
                     inputMode="numeric"
-                    className="w-32 rounded-lg px-4 py-2.5 text-sm outline-none font-mono-custom transition-all duration-200 focus:border-emerald-500/50"
+                    className="w-32 rounded-lg px-4 py-2.5 text-sm outline-none font-mono-custom transition-all duration-200 focus:border-emerald-500/50 text-[#EDEEF0]"
                     style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
                     onKeyDown={(e) => e.key === "Enter" && handleAddItem()} 
                   />
@@ -635,14 +675,14 @@
                           <input 
                             value={editDraft.name} 
                             onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
-                            className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none"
+                            className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none text-[#EDEEF0]"
                             style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
                           />
                           <input 
                             value={editDraft.value} 
                             onChange={(e) => setEditDraft((d) => ({ ...d, value: e.target.value }))} 
                             inputMode="numeric"
-                            className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom"
+                            className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom text-[#EDEEF0]"
                             style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
                             onKeyDown={(e) => e.key === "Enter" && handleSaveEdit(it.id)} 
                           />
@@ -908,7 +948,7 @@
       );
     }
 
-    // Initialize React Application
+    // Mount application
     const container = document.getElementById('root');
     const root = createRoot(container);
     root.render(<ValueLedger />);
