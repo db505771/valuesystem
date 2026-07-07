@@ -84,7 +84,6 @@
       amberDim: "#3A331F",
     };
 
-    const MAX_PROOFS = 10;
     const AUTO_INTERVAL_MS = 7000;
     const CHANGE_PROOF_CHANCE = 0.85;
 
@@ -145,7 +144,8 @@
         Pause: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />,
         Zap: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />,
         Database: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
-        Search: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        Search: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />,
+        ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
       };
 
       return (
@@ -172,7 +172,10 @@
       const [newValue, setNewValue] = useState("");
       const [editingId, setEditingId] = useState(null);
       const [editDraft, setEditDraft] = useState({ name: "", value: "" });
-      const [searchQuery, setSearchQuery] = useState(""); // Dynamic search keyword state
+      const [searchQuery, setSearchQuery] = useState("");
+      
+      // tracks if search query was triggered from a pet click in the proof list
+      const [referredFromProofs, setReferredFromProofs] = useState(false);
 
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
@@ -287,15 +290,13 @@
           setSaveStatus({ ok: false, error: "Realtime items load failed" });
         });
 
-        // Sync Proofs (Limited inside logic to keep code simple and avoid Rule 2 compound index requirements)
+        // Sync Proofs - No maximum amount limits in DB
         const unsubProofs = baseUserRef.collection('proofs').onSnapshot((snapshot) => {
           const loaded = [];
           snapshot.forEach((doc) => {
             loaded.push({ id: doc.id, ...doc.data() });
           });
-          // Perform UI sorting directly in JavaScript memory
-          loaded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-          setProofs(loaded.slice(0, MAX_PROOFS));
+          setProofs(loaded);
         }, (err) => {
           console.error("Firebase Proofs subscription error:", err);
         });
@@ -425,6 +426,7 @@
         }
       };
 
+      // Push proofs - removed MAX_PROOFS truncation on database save
       const pushProof = useCallback(async (proof) => {
         if (usingFirebase && db && user) {
           try {
@@ -437,7 +439,7 @@
           }
         } else {
           setProofs((prev) => {
-            const next = [proof, ...prev].slice(0, MAX_PROOFS);
+            const next = [proof, ...prev];
             localStorage.setItem(`${appId}_proofs`, JSON.stringify(next));
             return next;
           });
@@ -484,8 +486,6 @@
       };
 
       // ---- Balanced Multi-Item Bundle Matching Engine ----
-
-      // Selects a bundle of items that sums close to a target value, preventing extreme trade imbalances
       const selectBundle = (allItems, excludeIds, targetVal, minCount = 1, maxCount = 2) => {
         const available = allItems.filter(it => !excludeIds.includes(it.id));
         if (available.length === 0) return [];
@@ -493,7 +493,6 @@
         let bestCombination = [];
         let bestDiff = Infinity;
         
-        // Try up to 80 combinations to find a close matching sum
         for (let attempt = 0; attempt < 80; attempt++) {
           const count = Math.floor(Math.random() * (maxCount - minCount + 1)) + minCount;
           const shuffled = [...available].sort(() => Math.random() - 0.5);
@@ -506,7 +505,6 @@
             bestCombination = selection;
           }
           
-          // Fast-return if combination is extremely close (within 8% tolerance)
           if (diff <= targetVal * 0.08) {
             return selection;
           }
@@ -514,22 +512,18 @@
         return bestCombination;
       };
 
-      // Normal multi-item simulation (e.g. trading items within a tight balanced bracket)
       const generateRandomProof = useCallback(() => {
         const list = itemsRef.current;
-        if (list.length < 4) return; // Ensure ample items exist
+        if (list.length < 4) return;
 
-        // Choose 2 random starting items for Side OUT
         const shuffledOut = [...list].sort(() => Math.random() - 0.5);
         const outItems = shuffledOut.slice(0, 2);
         const outIds = outItems.map(it => it.id);
         const outTotal = outItems.reduce((s, it) => s + it.value, 0);
 
-        // Target fair value ratio: roughly 0.95 to 1.05
         const targetRatio = 0.95 + Math.random() * 0.1; 
         const targetInVal = outTotal * targetRatio;
 
-        // Find a matching bundle for Side IN (1 to 2 items)
         const inItems = selectBundle(list, outIds, targetInVal, 1, 2);
         if (inItems.length === 0) return;
         const inIds = inItems.map(it => it.id);
@@ -537,7 +531,6 @@
         pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "random" });
       }, [pushProof]);
 
-      // Refined Value-Correlated Change Proof Generator
       const generateChangeProof = useCallback((changedId, nextVal) => {
         const list = itemsRef.current;
         const changedItem = list.find((i) => i.id === changedId);
@@ -549,36 +542,27 @@
         const goneUp = delta > 0;
         const goneDown = delta < 0;
 
-        // Roll probabilities for realistic trading scenarios
-        let targetRatio = 1.0; // IN / OUT ratio
+        let targetRatio = 1.0;
         const roll = Math.random();
 
         if (goneUp) {
           if (roll < 0.65) {
-            // Normal scenario: OVERPAY (Target ratio between 1.06 and 1.22)
             targetRatio = 1.06 + Math.random() * 0.16;
           } else if (roll < 0.90) {
-            // Stable scenario: STABLE (Target ratio between 0.96 and 1.04)
             targetRatio = 0.96 + Math.random() * 0.08;
           } else {
-            // Rare minor loss: UNDERPAY (Bounded to small loss between 0.90 and 0.94)
             targetRatio = 0.90 + Math.random() * 0.04;
           }
         } else if (goneDown) {
           if (roll < 0.70) {
-            // Normal scenario: UNDERPAY (Target ratio between 0.78 and 0.94)
             targetRatio = 0.78 + Math.random() * 0.16;
           } else if (roll < 0.90) {
-            // Stable scenario: STABLE (Target ratio between 0.96 and 1.04)
             targetRatio = 0.96 + Math.random() * 0.08;
           } else {
-            // Rare minor profit: OVERPAY (Bounded to small gain between 1.06 and 1.10)
             targetRatio = 1.06 + Math.random() * 0.04;
           }
         }
 
-        // Changed item is always placed on the IN side
-        // Add 1 random companion item to Side IN to guarantee true multi-item experience
         const availableCompanions = list.filter(it => it.id !== changedId);
         const companionItem = availableCompanions[Math.floor(Math.random() * availableCompanions.length)];
         
@@ -586,10 +570,8 @@
         const inIds = inItems.map(it => it.id);
         const inTotal = inItems.reduce((s, it) => s + it.value, 0);
 
-        // Derive needed OUT value to achieve targetRatio (OUT = IN / targetRatio)
         const targetOutValue = inTotal / targetRatio;
 
-        // Find matching bundle for Side OUT (1 to 2 items)
         const outItems = selectBundle(list, inIds, targetOutValue, 1, 2);
         if (outItems.length === 0) return;
         const outIds = outItems.map(it => it.id);
@@ -609,6 +591,29 @@
         setEditDraft({ name: it.name, value: String(it.value) });
       };
 
+      // Handle pet interaction from within proof cards
+      const handlePetClick = (itemName) => {
+        setSearchQuery(itemName);
+        setReferredFromProofs(true);
+        setView("ledger");
+      };
+
+      // Reset filter context when going back
+      const handleBackToProofs = () => {
+        setSearchQuery("");
+        setReferredFromProofs(false);
+        setView("proofs");
+      };
+
+      // Safe Tab Route Changes
+      const handleTabChange = (tabKey) => {
+        setView(tabKey);
+        // Clear reference flag if user manually clicks away
+        if (tabKey !== "ledger") {
+          setReferredFromProofs(false);
+        }
+      };
+
       const itemsById = useMemo(() => Object.fromEntries(items.map((i) => [i.id, i])), [items]);
       const sortedItems = useMemo(() => [...items].sort((a, b) => b.value - a.value), [items]);
 
@@ -619,6 +624,13 @@
           it.name.toLowerCase().includes(searchQuery.toLowerCase())
         );
       }, [sortedItems, searchQuery]);
+
+      // 5 of the oldest proofs are displayed (Sort ascending by chronological creation time, then slice)
+      const oldestProofsDisplayed = useMemo(() => {
+        return [...proofs]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+          .slice(0, 5);
+      }, [proofs]);
 
       const rankedChanges = useMemo(() => {
         return [...items]
@@ -674,7 +686,7 @@
                 {tabs.map((t) => (
                   <button
                     key={t.key}
-                    onClick={() => setView(t.key)}
+                    onClick={() => handleTabChange(t.key)}
                     className="px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center gap-2 transition-all duration-200"
                     style={{ 
                       background: view === t.key ? C.panel2 : "transparent", 
@@ -708,6 +720,18 @@
             {view === "ledger" && (
               <div className="flex flex-col gap-4">
                 
+                {/* Back button shown ONLY when referred from pet click on proofs */}
+                {referredFromProofs && (
+                  <button 
+                    onClick={handleBackToProofs}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all self-start border animate-fadeIn hover:bg-emerald-500/15"
+                    style={{ background: `${C.greenDim}40`, color: C.green, borderColor: `${C.green}30` }}
+                  >
+                    <Icon name="ArrowLeft" size={12} />
+                    Back to Proofs
+                  </button>
+                )}
+
                 {/* Form to insert dynamic listings */}
                 <div className="rounded-xl p-4 flex gap-2 flex-wrap items-center animate-fadeIn" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
                   <input 
@@ -753,7 +777,10 @@
                     />
                     {searchQuery && (
                       <button 
-                        onClick={() => setSearchQuery("")}
+                        onClick={() => {
+                          setSearchQuery("");
+                          setReferredFromProofs(false);
+                        }}
                         className="text-white/40 hover:text-white transition-all p-1 text-xs"
                       >
                         Clear
@@ -874,17 +901,22 @@
                 </div>
 
                 <div className="flex flex-col gap-3">
-                  <span className="text-xs font-bold uppercase tracking-widest px-1 text-emerald-400/80">
-                    Live Proof Records
-                  </span>
+                  <div className="flex justify-between items-center px-1">
+                    <span className="text-xs font-bold uppercase tracking-widest text-emerald-400/80">
+                      Chronological History (Showing 5 Oldest Proofs)
+                    </span>
+                    <span className="text-[10px] font-mono-custom text-white/30">
+                      Total stored: {proofs.length}
+                    </span>
+                  </div>
                   
-                  {proofs.length === 0 && (
+                  {oldestProofsDisplayed.length === 0 && (
                     <div className="rounded-xl p-12 text-center text-sm" style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.faint }}>
                       Waiting for incoming evaluation transactions. Start Auto Proofs or execute manually.
                     </div>
                   )}
                   
-                  {proofs.map((p) => {
+                  {oldestProofsDisplayed.map((p) => {
                     const outItems = p.outIds.map((id) => itemsById[id]).filter(Boolean);
                     const inItems = p.inIds.map((id) => itemsById[id]).filter(Boolean);
                     const missing = outItems.length !== p.outIds.length || inItems.length !== p.inIds.length;
@@ -913,7 +945,7 @@
                             </span>
                             <button 
                               onClick={() => handleDeleteProof(p.id)} 
-                              className="text-white/30 hover:text-red-400 p-1" 
+                              className="text-white/30 hover:text-red-400 p-1 transition-colors" 
                               aria-label="Delete proof"
                             >
                               <Icon name="Trash2" size={12} />
@@ -931,26 +963,38 @@
 
                         <div className="grid grid-cols-2 gap-4 text-xs pt-1 border-t border-white/5">
                           <div>
-                            <div style={{ color: C.faint }} className="mb-1 font-mono-custom uppercase tracking-wider text-[10px]">
+                            <div style={{ color: C.faint }} className="mb-1.5 font-mono-custom uppercase tracking-wider text-[10px]">
                               OUTGOING · {fmt(outTotal)}
                             </div>
                             <div className="space-y-1 max-h-[100px] overflow-y-auto">
                               {outItems.map((it) => (
-                                <div key={it.id} style={{ color: C.muted }} className="truncate bg-white/5 px-2 py-1 rounded">
-                                  {it.name} <span className="font-mono-custom text-[10px] text-white/40 float-right">{fmt(it.value)}</span>
-                                </div>
+                                <button 
+                                  key={it.id} 
+                                  onClick={() => handlePetClick(it.name)}
+                                  style={{ color: C.muted }} 
+                                  className="w-full text-left truncate bg-white/5 px-2 py-1 rounded transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                >
+                                  <span className="truncate">{it.name}</span> 
+                                  <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
+                                </button>
                               ))}
                             </div>
                           </div>
                           <div>
-                            <div style={{ color: C.faint }} className="mb-1 font-mono-custom uppercase tracking-wider text-[10px]">
+                            <div style={{ color: C.faint }} className="mb-1.5 font-mono-custom uppercase tracking-wider text-[10px]">
                               INCOMING · {fmt(inTotal)}
                             </div>
                             <div className="space-y-1 max-h-[100px] overflow-y-auto">
                               {inItems.map((it) => (
-                                <div key={it.id} style={{ color: C.muted }} className="truncate bg-white/5 px-2 py-1 rounded">
-                                  {it.name} <span className="font-mono-custom text-[10px] text-white/40 float-right">{fmt(it.value)}</span>
-                                </div>
+                                <button 
+                                  key={it.id} 
+                                  onClick={() => handlePetClick(it.name)}
+                                  style={{ color: C.muted }} 
+                                  className="w-full text-left truncate bg-white/5 px-2 py-1 rounded transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                >
+                                  <span className="truncate">{it.name}</span> 
+                                  <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
+                                </button>
                               ))}
                             </div>
                           </div>
