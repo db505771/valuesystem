@@ -161,8 +161,7 @@
         Zap: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />,
         Database: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
         Search: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />,
-        ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />,
-        AlertTriangle: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
       };
 
       return (
@@ -523,10 +522,10 @@
         const changed = item && !isNaN(val) && val !== item.value;
         const targetName = editDraft.name.trim() || item.name;
 
-        // Base trend is initially what the user selected in the dropdown
+        // Base trend selected in edit select dropdown
         let targetTrend = editDraft.trend;
 
-        // Auto-trends calculation ONLY if user left the select trend matching original item trend
+        // Auto-trends fallback calculation ONLY if trend is unchanged manually
         if (changed && editDraft.trend === item.trend) {
           if (val > item.value) {
             targetTrend = item.trend === TRENDS.DROPPING ? TRENDS.DROPPING_SHOULD_RISE : TRENDS.RISING;
@@ -534,6 +533,9 @@
             targetTrend = item.trend === TRENDS.RISING ? TRENDS.RISING_SHOULD_DROP : TRENDS.DROPPING;
           }
         }
+
+        const trendChangedToCrashed = (editDraft.trend === TRENDS.CRASHED && item.trend !== TRENDS.CRASHED);
+        const shouldTriggerProof = changed || trendChangedToCrashed;
 
         if (usingFirebase && db && user) {
           try {
@@ -577,7 +579,7 @@
         }
 
         setEditingId(null);
-        if (changed && Math.random() < CHANGE_PROOF_CHANCE) {
+        if (shouldTriggerProof && Math.random() < CHANGE_PROOF_CHANCE) {
           generateChangeProof(id, val, targetTrend);
         }
       };
@@ -685,7 +687,6 @@
       };
 
       // Core Trend Pivot Sequence Builder
-      // First generates an Equal trade with the target item in OUT slot, then updates trend state and generates the target action trade
       const executePivotSequence = useCallback(async (baseItem, companionItem, endingTrend, isDropPivot) => {
         const list = itemsRef.current;
         if (list.length < 4) return;
@@ -720,10 +721,8 @@
 
           let targetRatio = 1.0;
           if (isDropPivot) {
-            // Drop Pivot: Strictly receives LESS value than given (IN < OUT, ratio: 0.78 to 0.90)
             targetRatio = 0.78 + Math.random() * 0.12;
           } else {
-            // Rise Pivot: Strictly receives MORE value than given (IN > OUT, ratio: 1.08 to 1.22)
             targetRatio = 1.08 + Math.random() * 0.14;
           }
 
@@ -771,17 +770,17 @@
           return;
         }
 
-        // Standard direct trade structures
         const outIds = [baseItem.id, companionItem.id];
         const outTotal = baseItem.value + companionItem.value;
 
         let targetRatio = 1.0; 
         if (trend === TRENDS.RISING) {
-          // Overpay: Receives higher total value (IN > OUT)
           targetRatio = 1.06 + Math.random() * 0.16;
-        } else if (trend === TRENDS.DROPPING || trend === TRENDS.CRASHED) {
-          // Underpay: Receives lesser total value (IN < OUT)
+        } else if (trend === TRENDS.DROPPING) {
           targetRatio = 0.78 + Math.random() * 0.16;
+        } else if (trend === TRENDS.CRASHED) {
+          // Crashed simulation: moderate 5-10% underpay
+          targetRatio = 0.90 + Math.random() * 0.05;
         } else {
           targetRatio = 0.96 + Math.random() * 0.08; 
         }
@@ -830,7 +829,8 @@
         } else if (trend === TRENDS.DROPPING) {
           targetRatio = 0.78 + Math.random() * 0.10;
         } else if (trend === TRENDS.CRASHED) {
-          targetRatio = 0.70 + Math.random() * 0.10;
+          // Explicit underpay formula matching 5% to 10% underpay limits
+          targetRatio = 0.90 + Math.random() * 0.05;
         } else {
           targetRatio = 0.96 + Math.random() * 0.08;
         }
@@ -952,7 +952,7 @@
           case TRENDS.DROPPING_SHOULD_RISE:
             return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Dropping, Should Rise</span>;
           case TRENDS.CRASHED:
-            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#3b2226] text-[#F2545B] border border-red-500/20 animate-pulse font-mono-custom">Crashed</span>;
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#3b2226] text-[#F2545B] border border-red-500/20 font-mono-custom">Crashed</span>;
           default:
             return <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20">Stable</span>;
         }
@@ -1124,7 +1124,7 @@
                           <div 
                             key={it.id} 
                             onClick={() => setExpandedItemId(isExpanded ? null : it.id)}
-                            className={`flex flex-col px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129] cursor-pointer`} 
+                            className="flex flex-col px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129] cursor-pointer" 
                             style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
                           >
                             <div className="flex items-center gap-3 w-full">
@@ -1185,11 +1185,6 @@
                                     {it.value !== it.startingValue && (
                                       <div className="text-[10px] mt-0.5 font-mono-custom flex items-center gap-1" style={{ color: C.faint }}>
                                         <span>Started @ {fmt(it.startingValue)}</span>
-                                        {isCrashed && (
-                                          <span className="text-red-400 font-bold flex items-center gap-0.5">
-                                            <Icon name="AlertTriangle" size={10} /> Market Crashed!
-                                          </span>
-                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -1330,7 +1325,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate px-2.5 py-1.5 rounded-xl bg-white/5 text-gray-300 hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
+                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
@@ -1348,7 +1343,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate px-2.5 py-1.5 rounded-xl bg-white/5 text-gray-300 hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
+                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
