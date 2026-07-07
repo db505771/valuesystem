@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Value Ledger</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Import Map for React and Libraries -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0?dev",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev"
+      }
+    }
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+    
+    body {
+      background-color: #111318;
+      color: #EDEEF0;
+      font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    }
+
+    .font-mono-custom {
+      font-family: 'JetBrains Mono', ui-monospace, 'Courier New', monospace;
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #191C22;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #2A2F39;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #565C68;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Firebase & App Script -->
+  <script type="module">
+    import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+    // ---- Design Tokens ---------------------------------------------------
+    const C = {
+      bg: "#111318",
+      panel: "#191C22",
+      panel2: "#1F232B",
+      line: "#2A2F39",
+      text: "#EDEEF0",
+      muted: "#868C99",
+      faint: "#565C68",
+      green: "#3ECF8E",
+      greenDim: "#1E3B31",
+      red: "#F2545B",
+      redDim: "#3B2226",
+      amber: "#E8B94A",
+      amberDim: "#3A331F",
+    };
+
+    const MAX_PROOFS = 10;
+    const AUTO_INTERVAL_MS = 7000;
+    const CHANGE_PROOF_CHANCE = 0.5;
+
+    // ---- Seed Data ---------------------------------------------------
+    const SEED_NAMES_VALUES = [
+      ["Shadow Dragon", 4200], ["Golden Phoenix", 3800], ["Frost Griffin", 2600], ["Crimson Kraken", 5000],
+      ["Storm Wolf", 1200], ["Ember Fox", 800], ["Arctic Owl", 650], ["Jade Panda", 1500],
+      ["Solar Tiger", 2100], ["Abyssal Shark", 3300], ["Ancient Turtle", 950], ["Nova Falcon", 1750],
+      ["Obsidian Bear", 2800], ["Lunar Lynx", 1100], ["Void Raven", 4600], ["Venom Cobra", 700],
+      ["Glacier Otter", 500], ["Thunder Elk", 1900], ["Blaze Hawk", 1300], ["Midnight Panther", 3900],
+      ["Copper Serpent", 600], ["Sapphire Wyrm", 4400], ["Ashen Owl", 1050], ["Verdant Stag", 1600],
+      ["Ivory Fox", 900], ["Cobalt Falcon", 2300], ["Sunfire Lion", 3600], ["Twilight Moth", 450],
+      ["Steel Boar", 1400], ["Radiant Unicorn", 5200],
+    ];
+    
+    const uid = () => Math.random().toString(36).slice(2, 10);
+    const SEED_ITEMS = SEED_NAMES_VALUES.map(([name, value]) => ({ id: uid(), name, startingValue: value, value }));
+    const fmt = (n) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n || 0);
+
+    // ---- Verdict Helpers ---------------------------------------------------
+    function computeVerdict(outTotal, inTotal) {
+      const diff = inTotal - outTotal;
+      const pct = outTotal === 0 ? 100 : (diff / outTotal) * 100;
+      let verdict;
+      if (pct > 8) verdict = "OVERPAY";
+      else if (pct < -8) verdict = "UNDERPAY";
+      else verdict = "STABLE";
+      let summary;
+      if (verdict === "OVERPAY") summary = `Receiver gains roughly ${Math.abs(pct).toFixed(1)}% more value than they give.`;
+      else if (verdict === "UNDERPAY") summary = `Receiver loses roughly ${Math.abs(pct).toFixed(1)}% value compared to what they give.`;
+      else summary = `Both sides are within about ${Math.abs(pct).toFixed(1)}% of each other.`;
+      return { verdict, summary };
+    }
+
+    function verdictColor(label) {
+      if (label === "OVERPAY") return { color: C.green, dim: C.greenDim };
+      if (label === "UNDERPAY") return { color: C.red, dim: C.redDim };
+      if (label === "STABLE") return { color: C.amber, dim: C.amberDim };
+      return { color: C.muted, dim: C.panel2 };
+    }
+
+    // ---- Beautiful SVG Icons -------------------------------------------------
+    const Icon = ({ name, size = 16, className = "" }) => {
+      const paths = {
+        Plus: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 5v14m-7-7h14" />,
+        Trash2: (
+          <>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </>
+        ),
+        Pencil: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />,
+        Check: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />,
+        X: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />,
+        ArrowRightLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />,
+        Clock3: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />,
+        ScrollText: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />,
+        TrendingUp: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />,
+        TrendingDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 17h8m0 0v-8m0 8l-8-8-4 4-6-6" />,
+        Minus: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 12H4" />,
+        Shuffle: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4h7l4 4 4-4h1m-1 0l-3-3m3 3l-3 3M4 20h7l4-4 4 4h1m-1 0l-3-3m3 3l-3 3" />,
+        Play: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />,
+        Pause: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />,
+        Zap: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />,
+        Database: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
+      };
+
+      return (
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" width={size} height={size} className={className}>
+          {paths[name] || null}
+        </svg>
+      );
+    };
+
+    // ---- Main Component --------------------------------------------------
+    function ValueLedger() {
+      const [view, setView] = useState("ledger");
+      const [items, setItems] = useState([]);
+      const [proofs, setProofs] = useState([]);
+      const [changeLog, setChangeLog] = useState([]);
+      const [autoRunning, setAutoRunning] = useState(false);
+      const [ready, setReady] = useState(false);
+      const [saveStatus, setSaveStatus] = useState(null); // { ok, error, ts } | null
+      
+      const [user, setUser] = useState(null);
+      const [usingFirebase, setUsingFirebase] = useState(false);
+
+      const [newName, setNewName] = useState("");
+      const [newValue, setNewValue] = useState("");
+      const [editingId, setEditingId] = useState(null);
+      const [editDraft, setEditDraft] = useState({ name: "", value: "" });
+
+      const itemsRef = useRef(items);
+      useEffect(() => { itemsRef.current = items; }, [items]);
+
+      // Initialize Firebase Configuration
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+      let db = null;
+      let auth = null;
+
+      try {
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+          const firebaseConfig = JSON.parse(__firebase_config);
+          const app = initializeApp(firebaseConfig);
+          auth = getAuth(app);
+          db = getFirestore(app);
+        }
+      } catch (e) {
+        console.warn("Firebase not loaded/configured; falling back to local memory storage mode.", e);
+      }
+
+      // Handle Authentication (RULE 3)
+      useEffect(() => {
+        if (!auth) {
+          // Dynamic Local Mode fallback
+          const localItems = localStorage.getItem(`${appId}_items`);
+          const localProofs = localStorage.getItem(`${appId}_proofs`);
+          const localChanges = localStorage.getItem(`${appId}_changes`);
+          const localAuto = localStorage.getItem(`${appId}_auto`);
+
+          setItems(localItems ? JSON.parse(localItems) : SEED_ITEMS);
+          setProofs(localProofs ? JSON.parse(localProofs) : []);
+          setChangeLog(localChanges ? JSON.parse(localChanges) : []);
+          setAutoRunning(localAuto ? JSON.parse(localAuto) : false);
+          setReady(true);
+          return;
+        }
+
+        const initAuth = async () => {
+          try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+              await signInAnonymously(auth);
+            }
+            setUsingFirebase(true);
+          } catch (e) {
+            console.error("Auth sign-in failed. Falling back to local state.", e);
+            setUsingFirebase(false);
+            setItems(SEED_ITEMS);
+            setReady(true);
+          }
+        };
+
+        initAuth();
+        const unsubscribe = onAuthStateChanged(auth, (usr) => {
+          setUser(usr);
+          if (!usr) {
+            setUsingFirebase(false);
+          }
+        });
+        return () => unsubscribe();
+      }, []);
+
+      // Realtime Data Sync from Firestore (RULES 1, 2, 3)
+      useEffect(() => {
+        if (!user || !db) return;
+
+        // Sync Items
+        const itemsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'items');
+        const unsubItems = onSnapshot(itemsCol, (snapshot) => {
+          const loaded = [];
+          snapshot.forEach((doc) => {
+            loaded.push({ id: doc.id, ...doc.data() });
+          });
+          if (loaded.length === 0) {
+            // Seed collection in Firebase
+            SEED_ITEMS.forEach(async (item) => {
+              await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', item.id), {
+                name: item.name,
+                startingValue: item.startingValue,
+                value: item.value
+              });
+            });
+          } else {
+            setItems(loaded);
+          }
+          setReady(true);
+        }, (err) => {
+          console.error("Firebase Items Subscription Error:", err);
+          setSaveStatus({ ok: false, error: "Realtime items load failed" });
+        });
+
+        // Sync Proofs
+        const proofsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'proofs');
+        const unsubProofs = onSnapshot(proofsCol, (snapshot) => {
+          const loaded = [];
+          snapshot.forEach((doc) => {
+            loaded.push({ id: doc.id, ...doc.data() });
+          });
+          loaded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          setProofs(loaded.slice(0, MAX_PROOFS));
+        }, (err) => {
+          console.error("Firebase Proofs Subscription Error:", err);
+        });
+
+        // Sync Changes log
+        const changesCol = collection(db, 'artifacts', appId, 'users', user.uid, 'changes');
+        const unsubChanges = onSnapshot(changesCol, (snapshot) => {
+          const loaded = [];
+          snapshot.forEach((doc) => {
+            loaded.push({ id: doc.id, ...doc.data() });
+          });
+          loaded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          setChangeLog(loaded);
+        }, (err) => {
+          console.error("Firebase Changes Subscription Error:", err);
+        });
+
+        // Sync settings
+        const settingsDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'auto-running');
+        const unsubSettings = onSnapshot(settingsDoc, (docSnap) => {
+          if (docSnap.exists()) {
+            setAutoRunning(docSnap.data().value);
+          } else {
+            setAutoRunning(false);
+          }
+        }, (err) => {
+          console.error("Firebase Settings Subscription Error:", err);
+        });
+
+        return () => {
+          unsubItems();
+          unsubProofs();
+          unsubChanges();
+          unsubSettings();
+        };
+      }, [user]);
+
+      // Report UI feedback on success/failure
+      const reportSaveResult = useCallback((result) => {
+        const ts = Date.now();
+        setSaveStatus({ ...result, ts });
+        if (result.ok) {
+          setTimeout(() => {
+            setSaveStatus((cur) => (cur && cur.ts === ts ? null : cur));
+          }, 2500);
+        }
+      }, []);
+
+      // Persist Operations (Firestore with Rule-Compliant Local Fallback)
+      const handleAddItem = async () => {
+        const val = parseFloat(newValue);
+        if (!newName.trim() || isNaN(val)) return;
+
+        const newId = uid();
+        const payload = { id: newId, name: newName.trim(), startingValue: val, value: val };
+
+        if (usingFirebase && db && user) {
+          try {
+            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', newId), {
+              name: payload.name,
+              startingValue: payload.startingValue,
+              value: payload.value
+            });
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          // Local fallback
+          const next = [...items, payload];
+          setItems(next);
+          localStorage.setItem(`${appId}_items`, JSON.stringify(next));
+          reportSaveResult({ ok: true });
+        }
+        setNewName("");
+        setNewValue("");
+      };
+
+      const handleDeleteItem = async (id) => {
+        if (usingFirebase && db && user) {
+          try {
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', id));
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          const next = items.filter((i) => i.id !== id);
+          setItems(next);
+          localStorage.setItem(`${appId}_items`, JSON.stringify(next));
+          reportSaveResult({ ok: true });
+        }
+      };
+
+      const handleSaveEdit = async (id) => {
+        const val = parseFloat(editDraft.value);
+        const item = items.find((i) => i.id === id);
+        const changed = item && !isNaN(val) && val !== item.value;
+        const targetName = editDraft.name.trim() || item.name;
+
+        if (usingFirebase && db && user) {
+          try {
+            if (changed) {
+              const changeId = uid();
+              await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'changes', changeId), {
+                itemId: id,
+                itemName: targetName,
+                oldValue: item.value,
+                newValue: val,
+                timestamp: new Date().toISOString()
+              });
+            }
+            await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'items', id), {
+              name: targetName,
+              value: isNaN(val) ? item.value : val
+            });
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          // Local storage updates
+          let updatedChanges = changeLog;
+          if (changed) {
+            updatedChanges = [
+              { id: uid(), itemId: id, itemName: targetName, oldValue: item.value, newValue: val, timestamp: new Date().toISOString() },
+              ...changeLog,
+            ];
+            setChangeLog(updatedChanges);
+            localStorage.setItem(`${appId}_changes`, JSON.stringify(updatedChanges));
+          }
+          const nextItems = items.map((i) => (i.id === id ? { ...i, name: targetName, value: isNaN(val) ? i.value : val } : i));
+          setItems(nextItems);
+          localStorage.setItem(`${appId}_items`, JSON.stringify(nextItems));
+          reportSaveResult({ ok: true });
+        }
+
+        setEditingId(null);
+        if (changed && Math.random() < CHANGE_PROOF_CHANCE) {
+          generateChangeProof(id);
+        }
+      };
+
+      const pushProof = useCallback(async (proof) => {
+        if (usingFirebase && db && user) {
+          try {
+            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'proofs', proof.id), proof);
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          setProofs((prev) => {
+            const next = [proof, ...prev].slice(0, MAX_PROOFS);
+            localStorage.setItem(`${appId}_proofs`, JSON.stringify(next));
+            return next;
+          });
+          reportSaveResult({ ok: true });
+        }
+      }, [usingFirebase, user, reportSaveResult]);
+
+      const handleDeleteProof = async (id) => {
+        if (usingFirebase && db && user) {
+          try {
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'proofs', id));
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          setProofs((prev) => {
+            const next = prev.filter((p) => p.id !== id);
+            localStorage.setItem(`${appId}_proofs`, JSON.stringify(next));
+            return next;
+          });
+          reportSaveResult({ ok: true });
+        }
+      };
+
+      const handleToggleAuto = async () => {
+        const next = !autoRunning;
+        if (usingFirebase && db && user) {
+          try {
+            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'auto-running'), { value: next });
+            reportSaveResult({ ok: true });
+          } catch (e) {
+            reportSaveResult({ ok: false, error: e.message });
+          }
+        } else {
+          setAutoRunning(next);
+          localStorage.setItem(`${appId}_auto`, JSON.stringify(next));
+          reportSaveResult({ ok: true });
+        }
+      };
+
+      // ---- Proof Generation Logic ----
+      const generateRandomProof = useCallback(() => {
+        const list = itemsRef.current;
+        if (list.length < 2) return;
+        const shuffled = [...list].sort(() => Math.random() - 0.5);
+        const outCount = 1 + Math.floor(Math.random() * 2);
+        const remaining = shuffled.slice(outCount);
+        if (remaining.length === 0) return;
+        const inCount = Math.max(1, Math.min(remaining.length, 1 + Math.floor(Math.random() * 2)));
+        const outIds = shuffled.slice(0, outCount).map((i) => i.id);
+        const inIds = remaining.slice(0, inCount).map((i) => i.id);
+        pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "random" });
+      }, [pushProof]);
+
+      const generateChangeProof = useCallback((changedId) => {
+        const list = itemsRef.current;
+        const changed = list.find((i) => i.id === changedId);
+        const others = list.filter((i) => i.id !== changedId);
+        if (!changed || others.length === 0) return;
+        const other = others[Math.floor(Math.random() * others.length)];
+        const changedOnIn = Math.random() < 0.5;
+        const outIds = changedOnIn ? [other.id] : [changedId];
+        const inIds = changedOnIn ? [changedId] : [other.id];
+        pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "change" });
+      }, [pushProof]);
+
+      // Auto-running loops
+      useEffect(() => {
+        if (!autoRunning) return;
+        const id = setInterval(generateRandomProof, AUTO_INTERVAL_MS);
+        return () => clearInterval(id);
+      }, [autoRunning, generateRandomProof]);
+
+      const startEdit = (it) => {
+        setEditingId(it.id);
+        setEditDraft({ name: it.name, value: String(it.value) });
+      };
+
+      const itemsById = useMemo(() => Object.fromEntries(items.map((i) => [i.id, i])), [items]);
+      const sortedItems = useMemo(() => [...items].sort((a, b) => b.value - a.value), [items]);
+
+      const rankedChanges = useMemo(() => {
+        return [...items]
+          .map((it) => {
+            const delta = it.value - it.startingValue;
+            const pct = it.startingValue === 0 ? 0 : (delta / it.startingValue) * 100;
+            return { ...it, delta, pct };
+          })
+          .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+      }, [items]);
+
+      if (!ready) {
+        return (
+          <div style={{ background: C.bg }} className="min-h-screen flex flex-col items-center justify-center">
+            <span style={{ color: C.muted }} className="text-sm tracking-widest uppercase font-mono-custom animate-pulse mb-2">
+              Syncing Database...
+            </span>
+            <div className="w-16 h-1 rounded-full bg-emerald-500 overflow-hidden relative">
+              <div className="absolute top-0 left-0 h-full w-1/2 bg-white rounded-full animate-ping"></div>
+            </div>
+          </div>
+        );
+      }
+
+      const tabs = [
+        { key: "ledger", label: "Ledger", icon: "ScrollText" },
+        { key: "proofs", label: "Proofs", icon: "ArrowRightLeft" },
+        { key: "changes", label: "Changes", icon: "TrendingUp" },
+      ];
+
+      return (
+        <div style={{ background: C.bg }} className="min-h-screen w-full relative">
+          <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col gap-6">
+            
+            {/* Header section with real-time sync status indicator */}
+            <div className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] tracking-[0.25em] uppercase" style={{ color: C.faint }}>
+                    automated trading desk
+                  </span>
+                  <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono-custom ${usingFirebase ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                    <Icon name="Database" size={10} />
+                    {usingFirebase ? "CLOUD SYNCD" : "LOCAL CACHE"}
+                  </div>
+                </div>
+                <h1 className="text-3xl font-bold tracking-tight mt-1" style={{ color: C.text }}>
+                  Value Ledger
+                </h1>
+              </div>
+              
+              <div className="flex rounded-xl p-1 gap-1" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                {tabs.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setView(t.key)}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center gap-2 transition-all duration-200"
+                    style={{ 
+                      background: view === t.key ? C.panel2 : "transparent", 
+                      color: view === t.key ? C.text : C.muted 
+                    }}
+                  >
+                    <Icon name={t.icon} size={14} />
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Sync Notifications */}
+            {saveStatus && (
+              <div className="transition-all duration-300">
+                {saveStatus.ok ? (
+                  <div className="flex items-center gap-1 text-xs text-emerald-400">
+                    <Icon name="Check" size={14} /> Synced with Database
+                  </div>
+                ) : (
+                  <div className="rounded-xl px-4 py-3 text-xs flex items-center gap-2" style={{ background: C.redDim, color: C.red, border: `1px solid ${C.red}` }}>
+                    <Icon name="X" size={16} />
+                    <span>Failed to sync: {saveStatus.error}. Check internet connection.</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB VIEW 1: LEDGER */}
+            {view === "ledger" && (
+              <div className="flex flex-col gap-4">
+                <div className="rounded-xl p-4 flex gap-2 flex-wrap items-center" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                  <input 
+                    value={newName} 
+                    onChange={(e) => setNewName(e.target.value)} 
+                    placeholder="New Item Name"
+                    className="flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm outline-none transition-all duration-200 focus:border-emerald-500/50"
+                    style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
+                  />
+                  <input 
+                    value={newValue} 
+                    onChange={(e) => setNewValue(e.target.value)} 
+                    placeholder="Starting Value" 
+                    inputMode="numeric"
+                    className="w-32 rounded-lg px-4 py-2.5 text-sm outline-none font-mono-custom transition-all duration-200 focus:border-emerald-500/50"
+                    style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddItem()} 
+                  />
+                  <button 
+                    onClick={handleAddItem} 
+                    className="rounded-lg p-2.5 h-10 w-10 flex items-center justify-center shrink-0 hover:opacity-90 transition-all active:scale-95"
+                    style={{ background: C.green, color: "#0C1410" }} 
+                    aria-label="Add item"
+                  >
+                    <Icon name="Plus" size={20} />
+                  </button>
+                </div>
+
+                <div className="rounded-xl overflow-hidden" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                  {items.length === 0 && (
+                    <div className="p-12 text-center text-sm" style={{ color: C.faint }}>
+                      No trading inventory registered. Enter item parameters above.
+                    </div>
+                  )}
+                  {sortedItems.map((it, idx) => (
+                    <div 
+                      key={it.id} 
+                      className="flex items-center gap-3 px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129]" 
+                      style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
+                    >
+                      {editingId === it.id ? (
+                        <>
+                          <input 
+                            value={editDraft.name} 
+                            onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
+                            className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none"
+                            style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
+                          />
+                          <input 
+                            value={editDraft.value} 
+                            onChange={(e) => setEditDraft((d) => ({ ...d, value: e.target.value }))} 
+                            inputMode="numeric"
+                            className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom"
+                            style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
+                            onKeyDown={(e) => e.key === "Enter" && handleSaveEdit(it.id)} 
+                          />
+                          <button 
+                            onClick={() => handleSaveEdit(it.id)} 
+                            className="hover:scale-110 active:scale-90 transition-all p-1.5 text-emerald-400" 
+                            aria-label="Save"
+                          >
+                            <Icon name="Check" size={18} />
+                          </button>
+                          <button 
+                            onClick={() => setEditingId(null)} 
+                            className="hover:scale-110 active:scale-90 transition-all p-1.5" 
+                            style={{ color: C.faint }} 
+                            aria-label="Cancel"
+                          >
+                            <Icon name="X" size={18} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate text-sm font-medium" style={{ color: C.text }}>
+                              {it.name}
+                            </div>
+                            {it.value !== it.startingValue && (
+                              <div className="text-[10px] mt-0.5 font-mono-custom" style={{ color: C.faint }}>
+                                Started @ {fmt(it.startingValue)}
+                              </div>
+                            )}
+                          </div>
+                          <span className="text-sm font-semibold font-mono-custom" style={{ color: C.muted }}>
+                            {fmt(it.value)}
+                          </span>
+                          
+                          <div className="flex items-center gap-1.5 ml-2">
+                            <button 
+                              onClick={() => startEdit(it)} 
+                              className="p-1.5 rounded hover:bg-white/5 active:scale-90 transition-all" 
+                              style={{ color: C.faint }} 
+                              aria-label="Edit"
+                            >
+                              <Icon name="Pencil" size={14} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteItem(it.id)} 
+                              className="p-1.5 rounded hover:bg-red-500/10 hover:text-red-400 active:scale-90 transition-all" 
+                              style={{ color: C.faint }} 
+                              aria-label="Delete"
+                            >
+                              <Icon name="Trash2" size={14} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* TAB VIEW 2: PROOFS */}
+            {view === "proofs" && (
+              <div className="flex flex-col gap-5">
+                <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={handleToggleAuto}
+                      className="flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95"
+                      style={{ background: autoRunning ? C.redDim : C.greenDim, color: autoRunning ? C.red : C.green }}
+                    >
+                      <Icon name={autoRunning ? "Pause" : "Play"} size={14} />
+                      {autoRunning ? "Disable Loop Engine" : "Activate Loop Engine"}
+                    </button>
+                    <button
+                      onClick={generateRandomProof}
+                      className="flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-2 transition-all hover:bg-[#2A2F39] active:scale-95"
+                      style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
+                    >
+                      <Icon name="Shuffle" size={14} /> 
+                      Run Evaluation Loop
+                    </button>
+                  </div>
+                  <span className="text-[11px] text-center" style={{ color: C.faint }}>
+                    {autoRunning 
+                      ? `Simulator generating smart ledger trade proofs every ${AUTO_INTERVAL_MS / 1000} seconds.` 
+                      : `Simulation systems operational. Activate Loop Engine to automatically build live proof records.`
+                    }
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <span className="text-xs font-bold uppercase tracking-widest px-1 text-emerald-400/80">
+                    Live Proof Records
+                  </span>
+                  
+                  {proofs.length === 0 && (
+                    <div className="rounded-xl p-12 text-center text-sm" style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.faint }}>
+                      Waiting for incoming evaluation transactions. Start Auto Proofs or execute manually.
+                    </div>
+                  )}
+                  
+                  {proofs.map((p) => {
+                    const outItems = p.outIds.map((id) => itemsById[id]).filter(Boolean);
+                    const inItems = p.inIds.map((id) => itemsById[id]).filter(Boolean);
+                    const missing = outItems.length !== p.outIds.length || inItems.length !== p.inIds.length;
+                    const outTotal = outItems.reduce((s, i) => s + i.value, 0);
+                    const inTotal = inItems.reduce((s, i) => s + i.value, 0);
+                    const { verdict, summary } = computeVerdict(outTotal, inTotal);
+                    const v = verdictColor(verdict);
+                    
+                    return (
+                      <div key={p.id} className="rounded-xl p-4 flex flex-col gap-3 transition-all duration-150 hover:border-white/10" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full" style={{ color: v.color, background: v.dim }}>
+                              {verdict}
+                            </span>
+                            <span className="flex items-center gap-1 text-[9px] uppercase font-mono-custom tracking-wider text-white/40">
+                              <Icon name={p.sourceType === "change" ? "Zap" : "Shuffle"} size={10} />
+                              {p.sourceType === "change" ? "Value Action" : "Simulated"}
+                            </span>
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 text-[11px]" style={{ color: C.faint }}>
+                              <Icon name="Clock3" size={11} /> 
+                              {new Date(p.timestamp).toLocaleTimeString()}
+                            </span>
+                            <button 
+                              onClick={() => handleDeleteProof(p.id)} 
+                              className="text-white/30 hover:text-red-400 p-1" 
+                              aria-label="Delete proof"
+                            >
+                              <Icon name="Trash2" size={12} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <p className="text-xs" style={{ color: C.muted }}>{summary}</p>
+                        
+                        {missing && (
+                          <p className="text-[10px] italic" style={{ color: C.faint }}>
+                            Some items referenced in this proof transaction have since been removed.
+                          </p>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-4 text-xs pt-1 border-t border-white/5">
+                          <div>
+                            <div style={{ color: C.faint }} className="mb-1 font-mono-custom uppercase tracking-wider text-[10px]">
+                              OUTGOING · {fmt(outTotal)}
+                            </div>
+                            <div className="space-y-0.5 max-h-[100px] overflow-y-auto">
+                              {outItems.map((it) => (
+                                <div key={it.id} style={{ color: C.muted }} className="truncate">
+                                  {it.name}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ color: C.faint }} className="mb-1 font-mono-custom uppercase tracking-wider text-[10px]">
+                              INCOMING · {fmt(inTotal)}
+                            </div>
+                            <div className="space-y-0.5 max-h-[100px] overflow-y-auto">
+                              {inItems.map((it) => (
+                                <div key={it.id} style={{ color: C.muted }} className="truncate">
+                                  {it.name}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* TAB VIEW 3: VALUE CHANGES */}
+            {view === "changes" && (
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs font-bold uppercase tracking-widest px-1 text-emerald-400/80">
+                    Inventory Movers
+                  </span>
+                  
+                  <div className="rounded-xl overflow-hidden" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                    {rankedChanges.map((it, idx) => {
+                      const up = it.delta > 0, down = it.delta < 0;
+                      const color = up ? C.green : down ? C.red : C.faint;
+                      const IconName = up ? "TrendingUp" : down ? "TrendingDown" : "Minus";
+                      
+                      return (
+                        <div 
+                          key={it.id} 
+                          className="flex items-center gap-3 px-4 py-3" 
+                          style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate text-sm font-medium" style={{ color: C.text }}>
+                              {it.name}
+                            </div>
+                            <div className="text-[10px] font-mono-custom" style={{ color: C.faint }}>
+                              Base {fmt(it.startingValue)} → Live {fmt(it.value)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 text-xs font-bold font-mono-custom" style={{ color }}>
+                            <Icon name={IconName} size={14} />
+                            {it.pct === 0 ? "0%" : `${it.pct > 0 ? "+" : ""}${it.pct.toFixed(1)}%`}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs font-bold uppercase tracking-widest px-1 text-emerald-400/80">
+                    Live Ledger Change Log
+                  </span>
+                  
+                  {changeLog.length === 0 && (
+                    <div className="rounded-xl p-12 text-center text-sm" style={{ background: C.panel, border: `1px solid ${C.line}`, color: C.faint }}>
+                      Modifications to item valuations will construct a historical registry here.
+                    </div>
+                  )}
+                  
+                  <div className="space-y-2">
+                    {changeLog.map((c) => {
+                      const up = c.newValue > c.oldValue;
+                      return (
+                        <div 
+                          key={c.id} 
+                          className="rounded-xl px-4 py-3 flex items-center justify-between hover:border-white/10 transition-all duration-150" 
+                          style={{ background: C.panel, border: `1px solid ${C.line}` }}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate" style={{ color: C.text }}>
+                              {c.itemName}
+                            </div>
+                            <div className="text-[10px]" style={{ color: C.faint }}>
+                              {new Date(c.timestamp).toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs shrink-0 font-mono-custom">
+                            <span style={{ color: C.faint }}>{fmt(c.oldValue)}</span>
+                            <span style={{ color: C.faint }}>→</span>
+                            <span className="font-bold" style={{ color: up ? C.green : C.red }}>
+                              {fmt(c.newValue)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Initialize React Application
+    const container = document.getElementById('root');
+    const root = createRoot(container);
+    root.render(<ValueLedger />);
+  </script>
+</body>
+</html>
