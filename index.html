@@ -85,7 +85,7 @@
     };
 
     const AUTO_INTERVAL_MS = 7000;
-    const CHANGE_PROOF_CHANCE = 0.85;
+    const CHANGE_PROOF_CHANCE = 0.90;
 
     // ---- Seed Data ---------------------------------------------------
     const SEED_NAMES_VALUES = [
@@ -99,8 +99,24 @@
       ["Steel Boar", 1400], ["Radiant Unicorn", 5200],
     ];
     
+    // Dynamic trend states matching trading sentiments
+    const TRENDS = {
+      STABLE: "stable",
+      RISING: "rising",
+      DROPPING: "dropping",
+      RISING_SHOULD_DROP: "rising_should_drop",
+      DROPPING_SHOULD_RISE: "dropping_should_rise",
+      CRASHED: "crashed"
+    };
+
     const uid = () => Math.random().toString(36).slice(2, 10);
-    const SEED_ITEMS = SEED_NAMES_VALUES.map(([name, value]) => ({ id: uid(), name, startingValue: value, value }));
+    const SEED_ITEMS = SEED_NAMES_VALUES.map(([name, value]) => ({ 
+      id: uid(), 
+      name, 
+      startingValue: value, 
+      value,
+      trend: TRENDS.STABLE
+    }));
     const fmt = (n) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n || 0);
 
     // ---- Verdict Helpers ---------------------------------------------------
@@ -146,7 +162,7 @@
         Database: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />,
         Search: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />,
         ArrowLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />,
-        TrendingRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+        AlertTriangle: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
       };
 
       return (
@@ -156,7 +172,7 @@
       );
     };
 
-    // ---- Native SVG Interactive Line Graph Component ---------------------
+    // ---- Native SVG Valuation Line Graph Component ---------------------
     function ValuationGraph({ history, colorTheme }) {
       if (!history || history.length < 2) {
         return (
@@ -180,14 +196,12 @@
       const maxVal = Math.max(...values);
       const valRange = maxVal - minVal === 0 ? 1 : maxVal - minVal;
 
-      // Map mathematical data into responsive coordinate points
       const points = history.map((p, idx) => {
         const x = padding + (idx / (history.length - 1)) * chartWidth;
         const y = padding + chartHeight - ((p.value - minVal) / valRange) * chartHeight;
         return { x, y, value: p.value, date: p.date };
       });
 
-      // SVG path computations
       const linePath = points.reduce((acc, p, idx) => {
         return acc + (idx === 0 ? `M ${p.x} ${p.y}` : ` L ${p.x} ${p.y}`);
       }, "");
@@ -211,15 +225,12 @@
               </linearGradient>
             </defs>
 
-            {/* Horizontal Grid lines */}
             <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="#2A2F39" strokeWidth="0.75" strokeDasharray="3,3" />
             <line x1={padding} y1={padding + chartHeight / 2} x2={width - padding} y2={padding + chartHeight / 2} stroke="#2A2F39" strokeWidth="0.75" strokeDasharray="3,3" />
             <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#2A2F39" strokeWidth="1" />
 
-            {/* Shaded Area Fill */}
             <path d={areaPath} fill="url(#chartGradient)" className="transition-all duration-300" />
 
-            {/* Dynamic Line Stroke */}
             <path 
               d={linePath} 
               fill="none" 
@@ -230,7 +241,6 @@
               className="transition-all duration-300"
             />
 
-            {/* Circular Data Markers with hover-sensitive Tooltips */}
             {points.map((p, idx) => (
               <g key={idx} className="group cursor-pointer">
                 <circle 
@@ -242,8 +252,6 @@
                   strokeWidth="2.5" 
                   className="transition-all duration-150 group-hover:r-5 group-hover:fill-white" 
                 />
-                
-                {/* Tooltip background card */}
                 <rect 
                   x={p.x - 30} 
                   y={p.y - 28} 
@@ -255,8 +263,6 @@
                   strokeWidth="1" 
                   className="hidden group-hover:block transition-all" 
                 />
-                
-                {/* Tooltip dynamic valuation text */}
                 <text 
                   x={p.x} 
                   y={p.y - 15} 
@@ -269,7 +275,6 @@
             ))}
           </svg>
 
-          {/* Time axis bounds */}
           <div className="flex justify-between text-[9px] text-[#565C68] font-mono-custom mt-2 pt-1.5 border-t border-white/5">
             <span>START: {new Date(history[0].date).toLocaleDateString()}</span>
             <span>LIVE RECORDING</span>
@@ -294,20 +299,16 @@
       const [newName, setNewName] = useState("");
       const [newValue, setNewValue] = useState("");
       const [editingId, setEditingId] = useState(null);
-      const [editDraft, setEditDraft] = useState({ name: "", value: "" });
+      const [editDraft, setEditDraft] = useState({ name: "", value: "", trend: TRENDS.STABLE });
       const [searchQuery, setSearchQuery] = useState("");
       
-      // tracks if search query was triggered from a pet click in the proof list
       const [referredFromProofs, setReferredFromProofs] = useState(false);
-      const [expandedItemId, setExpandedItemId] = useState(null); // tracking list expandable items
+      const [expandedItemId, setExpandedItemId] = useState(null);
 
       const itemsRef = useRef(items);
       useEffect(() => { itemsRef.current = items; }, [items]);
 
-      // Access Global Variables safely
       const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-      
-      // Setup Firebase Compatibility references safely
       const [db, setDb] = useState(null);
       const [auth, setAuth] = useState(null);
 
@@ -399,7 +400,8 @@
               await baseUserRef.collection('items').doc(item.id).set({
                 name: item.name,
                 startingValue: item.startingValue,
-                value: item.value
+                value: item.value,
+                trend: item.trend || TRENDS.STABLE
               });
             });
           } else {
@@ -469,17 +471,19 @@
         if (!newName.trim() || isNaN(val)) return;
 
         const newId = uid();
-        const payload = { id: newId, name: newName.trim(), startingValue: val, value: val };
+        const payload = { 
+          id: newId, 
+          name: newName.trim(), 
+          startingValue: val, 
+          value: val, 
+          trend: TRENDS.STABLE 
+        };
 
         if (usingFirebase && db && user) {
           try {
             await db.collection('artifacts').doc(appId)
               .collection('users').doc(user.uid)
-              .collection('items').doc(newId).set({
-                name: payload.name,
-                startingValue: payload.startingValue,
-                value: payload.value
-              });
+              .collection('items').doc(newId).set(payload);
             reportSaveResult({ ok: true });
           } catch (e) {
             reportSaveResult({ ok: false, error: e.message });
@@ -494,11 +498,47 @@
         setNewValue("");
       };
 
+      // Atomic Trend Update helper to transition items
+      const updateItemTrend = async (itemId, newTrend) => {
+        if (usingFirebase && db && user) {
+          try {
+            await db.collection('artifacts').doc(appId)
+              .collection('users').doc(user.uid)
+              .collection('items').doc(itemId).update({ trend: newTrend });
+          } catch (e) {
+            console.error("Failed to sync automated trend transition:", e);
+          }
+        } else {
+          setItems((prev) => {
+            const next = prev.map(it => it.id === itemId ? { ...it, trend: newTrend } : it);
+            localStorage.setItem(`${appId}_items`, JSON.stringify(next));
+            return next;
+          });
+        }
+      };
+
       const handleSaveEdit = async (id) => {
         const val = parseFloat(editDraft.value);
         const item = items.find((i) => i.id === id);
         const changed = item && !isNaN(val) && val !== item.value;
         const targetName = editDraft.name.trim() || item.name;
+
+        // Auto-trends on change based on price drops or rises
+        let targetTrend = editDraft.trend;
+        if (changed) {
+          if (val > item.value) {
+            // Pivot check: if it was dropping, trigger transitional sentiment sequence
+            targetTrend = item.trend === TRENDS.DROPPING ? TRENDS.DROPPING_SHOULD_RISE : TRENDS.RISING;
+          } else if (val < item.value) {
+            // Pivot check: if it was rising, trigger transitional sentiment sequence
+            targetTrend = item.trend === TRENDS.RISING ? TRENDS.RISING_SHOULD_DROP : TRENDS.DROPPING;
+          }
+        }
+
+        // Auto-crash safeguard if a pet rises way too much
+        if (val > item.startingValue * 1.8) {
+          targetTrend = TRENDS.CRASHED;
+        }
 
         if (usingFirebase && db && user) {
           try {
@@ -518,7 +558,8 @@
               .collection('users').doc(user.uid)
               .collection('items').doc(id).update({
                 name: targetName,
-                value: isNaN(val) ? item.value : val
+                value: isNaN(val) ? item.value : val,
+                trend: targetTrend
               });
             reportSaveResult({ ok: true });
           } catch (e) {
@@ -534,7 +575,7 @@
             setChangeLog(updatedChanges);
             localStorage.setItem(`${appId}_changes`, JSON.stringify(updatedChanges));
           }
-          const nextItems = items.map((i) => (i.id === id ? { ...i, name: targetName, value: isNaN(val) ? i.value : val } : i));
+          const nextItems = items.map((i) => (i.id === id ? { ...i, name: targetName, value: isNaN(val) ? i.value : val, trend: targetTrend } : i));
           setItems(nextItems);
           localStorage.setItem(`${appId}_items`, JSON.stringify(nextItems));
           reportSaveResult({ ok: true });
@@ -542,11 +583,28 @@
 
         setEditingId(null);
         if (changed && Math.random() < CHANGE_PROOF_CHANCE) {
-          generateChangeProof(id, val);
+          generateChangeProof(id, val, targetTrend);
         }
       };
 
       const pushProof = useCallback(async (proof) => {
+        // Equal trades cool down system: if proof verdict results in STABLE, automatically set all involved items' trends back to STABLE
+        const outItems = proof.outIds.map((id) => itemsById[id]).filter(Boolean);
+        const inItems = proof.inIds.map((id) => itemsById[id]).filter(Boolean);
+        const outTotal = outItems.reduce((s, i) => s + i.value, 0);
+        const inTotal = inItems.reduce((s, i) => s + i.value, 0);
+        const { verdict } = computeVerdict(outTotal, inTotal);
+
+        if (verdict === "STABLE") {
+          const involvedIds = [...proof.outIds, ...proof.inIds];
+          involvedIds.forEach(itemId => {
+            const currentItem = itemsById[itemId];
+            if (currentItem && currentItem.trend !== TRENDS.STABLE) {
+              updateItemTrend(itemId, TRENDS.STABLE);
+            }
+          });
+        }
+
         if (usingFirebase && db && user) {
           try {
             await db.collection('artifacts').doc(appId)
@@ -564,7 +622,7 @@
           });
           reportSaveResult({ ok: true });
         }
-      }, [usingFirebase, db, user, reportSaveResult]);
+      }, [usingFirebase, db, user, reportSaveResult, itemsById]);
 
       const handleDeleteProof = async (id) => {
         if (usingFirebase && db && user) {
@@ -631,74 +689,178 @@
         return bestCombination;
       };
 
+      // Core Trend Pivot Sequence Builder
+      // First generates an Equal trade with the target item in OUT slot, then updates trend state and generates the target action trade
+      const executePivotSequence = useCallback(async (baseItem, companionItem, endingTrend, isDropPivot) => {
+        const list = itemsRef.current;
+        if (list.length < 4) return;
+
+        // Stage 1: Generate Equal Trade (STABLE) Proof
+        // Owner gives: baseItem (pivot item) + companionItem in OUT
+        const outIds = [baseItem.id, companionItem.id];
+        const outTotal = baseItem.value + companionItem.value;
+
+        // Equal Trade: IN value matches OUT value close to 1.0 ratio
+        const equalOutItems = selectBundle(list, outIds, outTotal, 1, 2);
+        if (equalOutItems.length > 0) {
+          const equalInIds = equalOutItems.map(it => it.id);
+          await pushProof({
+            id: uid(),
+            timestamp: new Date().toISOString(),
+            outIds: outIds, // Gives base item
+            inIds: equalInIds, // Gets equal value items
+            sourceType: "change"
+          });
+        }
+
+        // Transition item's live trend state
+        await updateItemTrend(baseItem.id, endingTrend);
+
+        // Stage 2: Generate the subsequent Underpay/Overpay proof (after brief interval)
+        setTimeout(async () => {
+          const updatedList = itemsRef.current;
+          const freshBase = updatedList.find(i => i.id === baseItem.id) || baseItem;
+          const freshCompanion = updatedList.find(i => i.id === companionItem.id) || companionItem;
+          
+          const freshOutIds = [freshBase.id, freshCompanion.id];
+          const freshOutTotal = freshBase.value + freshCompanion.value;
+
+          let targetRatio = 1.0;
+          if (isDropPivot) {
+            // Drop Pivot: Strictly receives LESS value than given (IN < OUT, ratio: 0.78 to 0.90)
+            targetRatio = 0.78 + Math.random() * 0.12;
+          } else {
+            // Rise Pivot: Strictly receives MORE value than given (IN > OUT, ratio: 1.08 to 1.22)
+            targetRatio = 1.08 + Math.random() * 0.14;
+          }
+
+          const targetInValue = freshOutTotal * targetRatio;
+          const actionInItems = selectBundle(updatedList, freshOutIds, targetInValue, 1, 2);
+          if (actionInItems.length > 0) {
+            const actionInIds = actionInItems.map(it => it.id);
+            await pushProof({
+              id: uid(),
+              timestamp: new Date(Date.now() + 1000).toISOString(), // ordering in list
+              outIds: freshOutIds,
+              inIds: actionInIds,
+              sourceType: "change"
+            });
+          }
+        }, 1200);
+
+      }, [pushProof]);
+
+      // Simulation loop trigger
       const generateRandomProof = useCallback(() => {
         const list = itemsRef.current;
         if (list.length < 4) return;
 
-        const shuffledOut = [...list].sort(() => Math.random() - 0.5);
-        const outItems = shuffledOut.slice(0, 2);
-        const outIds = outItems.map(it => it.id);
-        const outTotal = outItems.reduce((s, it) => s + it.value, 0);
+        // Speculative Bot Sentiment preference shifts
+        if (Math.random() < 0.25) {
+          const speculativeItem = list[Math.floor(Math.random() * list.length)];
+          const possibleForecasts = [TRENDS.RISING_SHOULD_DROP, TRENDS.DROPPING_SHOULD_RISE, TRENDS.STABLE];
+          const chosenTrendForecast = possibleForecasts[Math.floor(Math.random() * possibleForecasts.length)];
+          updateItemTrend(speculativeItem.id, chosenTrendForecast);
+        }
 
-        const targetRatio = 0.95 + Math.random() * 0.1; 
-        const targetInVal = outTotal * targetRatio;
+        const baseItem = list[Math.floor(Math.random() * list.length)];
+        const trend = baseItem.trend || TRENDS.STABLE;
 
-        const inItems = selectBundle(list, outIds, targetInVal, 1, 2);
+        const availableCompanions = list.filter(it => it.id !== baseItem.id);
+        const companionItem = availableCompanions[Math.floor(Math.random() * availableCompanions.length)];
+
+        // Handle active transitional Pivot sentiments in simulation
+        if (trend === TRENDS.RISING_SHOULD_DROP) {
+          executePivotSequence(baseItem, companionItem, TRENDS.DROPPING, true);
+          return;
+        } else if (trend === TRENDS.DROPPING_SHOULD_RISE) {
+          executePivotSequence(baseItem, companionItem, TRENDS.RISING, false);
+          return;
+        }
+
+        // Standard direct trade structures
+        // Side OUT gives baseItem (rising/dropping/stable) + companionItem
+        const outIds = [baseItem.id, companionItem.id];
+        const outTotal = baseItem.value + companionItem.value;
+
+        let targetRatio = 1.0; // IN_total / OUT_total ratio
+        if (trend === TRENDS.RISING) {
+          // Overpay: Receives higher total value (IN > OUT, ratio: 1.06 to 1.22)
+          targetRatio = 1.06 + Math.random() * 0.16;
+        } else if (trend === TRENDS.DROPPING || trend === TRENDS.CRASHED) {
+          // Underpay: Receives lesser total value (IN < OUT, ratio: 0.78 to 0.94)
+          targetRatio = 0.78 + Math.random() * 0.16;
+        } else {
+          targetRatio = 0.96 + Math.random() * 0.08; // Stable trade
+        }
+
+        const targetInValue = outTotal * targetRatio;
+        const inItems = selectBundle(list, outIds, targetInValue, 1, 2);
         if (inItems.length === 0) return;
         const inIds = inItems.map(it => it.id);
 
-        pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "random" });
-      }, [pushProof]);
+        pushProof({ 
+          id: uid(), 
+          timestamp: new Date().toISOString(), 
+          outIds, 
+          inIds, 
+          sourceType: "random"
+        });
+      }, [pushProof, executePivotSequence]);
 
-      const generateChangeProof = useCallback((changedId, nextVal) => {
+      // Change Proofs triggered from explicit value action modifications
+      const generateChangeProof = useCallback((changedId, nextVal, explicitTrend) => {
         const list = itemsRef.current;
         const changedItem = list.find((i) => i.id === changedId);
         if (!changedItem || list.length < 4) return;
 
         const val = nextVal !== undefined ? nextVal : changedItem.value;
-        const delta = val - changedItem.startingValue;
-
-        const goneUp = delta > 0;
-        const goneDown = delta < 0;
-
-        let targetRatio = 1.0;
-        const roll = Math.random();
-
-        if (goneUp) {
-          if (roll < 0.65) {
-            targetRatio = 1.06 + Math.random() * 0.16;
-          } else if (roll < 0.90) {
-            targetRatio = 0.96 + Math.random() * 0.08;
-          } else {
-            targetRatio = 0.90 + Math.random() * 0.04;
-          }
-        } else if (goneDown) {
-          if (roll < 0.70) {
-            targetRatio = 0.78 + Math.random() * 0.16;
-          } else if (roll < 0.90) {
-            targetRatio = 0.96 + Math.random() * 0.08;
-          } else {
-            targetRatio = 1.06 + Math.random() * 0.04;
-          }
-        }
+        const trend = explicitTrend || changedItem.trend || TRENDS.STABLE;
 
         const availableCompanions = list.filter(it => it.id !== changedId);
         const companionItem = availableCompanions[Math.floor(Math.random() * availableCompanions.length)];
-        
-        const inItems = [changedItem, companionItem];
+
+        // Execute Pivot Sequence
+        if (trend === TRENDS.RISING_SHOULD_DROP) {
+          executePivotSequence(changedItem, companionItem, TRENDS.DROPPING, true);
+          return;
+        } else if (trend === TRENDS.DROPPING_SHOULD_RISE) {
+          executePivotSequence(changedItem, companionItem, TRENDS.RISING, false);
+          return;
+        }
+
+        // Side OUT contains changedItem + companionItem
+        const outIds = [changedItem.id, companionItem.id];
+        const outTotal = val + companionItem.value;
+
+        let targetRatio = 1.0;
+        if (trend === TRENDS.RISING) {
+          // Overpay: gets higher value in return
+          targetRatio = 1.06 + Math.random() * 0.16;
+        } else if (trend === TRENDS.DROPPING) {
+          // Underpay: gets less value than giving
+          targetRatio = 0.78 + Math.random() * 0.10;
+        } else if (trend === TRENDS.CRASHED) {
+          // Crashed: major underpay loss
+          targetRatio = 0.70 + Math.random() * 0.10;
+        } else {
+          targetRatio = 0.96 + Math.random() * 0.08;
+        }
+
+        const targetInValue = outTotal * targetRatio;
+        const inItems = selectBundle(list, outIds, targetInValue, 1, 2);
+        if (inItems.length === 0) return;
         const inIds = inItems.map(it => it.id);
-        const inTotal = inItems.reduce((s, it) => s + it.value, 0);
 
-        const targetOutValue = inTotal / targetRatio;
+        pushProof({ 
+          id: uid(), 
+          timestamp: new Date().toISOString(), 
+          outIds, 
+          inIds, 
+          sourceType: "change"
+        });
+      }, [pushProof, executePivotSequence]);
 
-        const outItems = selectBundle(list, inIds, targetOutValue, 1, 2);
-        if (outItems.length === 0) return;
-        const outIds = outItems.map(it => it.id);
-
-        pushProof({ id: uid(), timestamp: new Date().toISOString(), outIds, inIds, sourceType: "change" });
-      }, [pushProof]);
-
-      // Simulation loop trigger
       useEffect(() => {
         if (!autoRunning) return;
         const id = setInterval(generateRandomProof, AUTO_INTERVAL_MS);
@@ -706,32 +868,28 @@
       }, [autoRunning, generateRandomProof]);
 
       const startEdit = (e, it) => {
-        e.stopPropagation(); // prevent collapsing/expanding row triggers
+        e.stopPropagation();
         setEditingId(it.id);
-        setEditDraft({ name: it.name, value: String(it.value) });
+        setEditDraft({ name: it.name, value: String(it.value), trend: it.trend || TRENDS.STABLE });
       };
 
-      // Handle pet interaction from within proof cards
       const handlePetClick = (itemName) => {
         setSearchQuery(itemName);
         setReferredFromProofs(true);
         setView("ledger");
 
-        // Automatically find target item, expand it, and show graph
         const target = items.find(it => it.name.toLowerCase() === itemName.toLowerCase());
         if (target) {
           setExpandedItemId(target.id);
         }
       };
 
-      // Reset filter context when going back
       const handleBackToProofs = () => {
         setSearchQuery("");
         setReferredFromProofs(false);
         setView("proofs");
       };
 
-      // Safe Tab Route Changes
       const handleTabChange = (tabKey) => {
         setView(tabKey);
         if (tabKey !== "ledger") {
@@ -742,7 +900,6 @@
       const itemsById = useMemo(() => Object.fromEntries(items.map((i) => [i.id, i])), [items]);
       const sortedItems = useMemo(() => [...items].sort((a, b) => b.value - a.value), [items]);
 
-      // Filter sorted items list using search query input dynamically
       const filteredItems = useMemo(() => {
         if (!searchQuery.trim()) return sortedItems;
         return sortedItems.filter(it => 
@@ -767,19 +924,16 @@
           .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
       }, [items]);
 
-      // Construct price history list for the selected/expanded item dynamically
       const getItemValuationHistory = useCallback((itemId) => {
         const item = itemsById[itemId];
         if (!item) return [];
 
-        // filter changes chronologically oldest first
         const logs = [...changeLog]
           .filter(l => l.itemId === itemId)
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         const history = [];
         
-        // Push initial point
         const initialDate = logs.length > 0 
           ? new Date(new Date(logs[0].timestamp).getTime() - (3600000 * 24)).toISOString() 
           : new Date(Date.now() - (3600000 * 24)).toISOString();
@@ -789,7 +943,6 @@
           date: initialDate
         });
 
-        // Push subsequent valuation edits
         logs.forEach(log => {
           history.push({
             value: log.newValue,
@@ -799,6 +952,25 @@
 
         return history;
       }, [changeLog, itemsById]);
+
+      const renderTrendBadge = (trend) => {
+        switch (trend) {
+          case TRENDS.RISING:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Rising</span>;
+          case TRENDS.SHOULD_RISE:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-emerald-500/40 text-emerald-300">Should Rise</span>;
+          case TRENDS.DROPPING:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">Dropping</span>;
+          case TRENDS.SHOULD_DROP:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-red-500/40 text-red-300">Should Drop</span>;
+          case TRENDS.CRASHED:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/30 animate-pulse font-mono-custom">Crashed</span>;
+          case TRENDS.SHOULD_STABLE:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border border-gray-500/40 text-gray-300">Should Stable</span>;
+          default:
+            return <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20">Stable</span>;
+        }
+      };
 
       if (!ready) {
         return (
@@ -820,11 +992,11 @@
       ];
 
       return (
-        <div style={{ background: C.bg }} className="min-h-screen w-full relative">
+        <div style={{ background: C.bg }} className="min-h-screen w-full relative pb-10">
           <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col gap-6">
             
             {/* Header section */}
-            <div className="flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39]">
+            <div className="flex_items-center justify-between flex-wrap gap-4 pb-4 border-b border-[#2A2F39] flex">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] tracking-[0.25em] uppercase" style={{ color: C.faint }}>
@@ -860,7 +1032,7 @@
 
             {/* Sync Status Notifications */}
             {saveStatus && (
-              <div className="transition-all duration-300">
+              <div className="transition-all duration-300 animate-fadeIn">
                 {saveStatus.ok ? (
                   <div className="flex items-center gap-1 text-xs text-emerald-400">
                     <Icon name="Check" size={14} /> Synced with Database
@@ -959,33 +1131,48 @@
                       {filteredItems.map((it, idx) => {
                         const isExpanded = expandedItemId === it.id;
                         const deltaVal = it.value - it.startingValue;
-                        const goingUp = deltaVal > 0;
-                        const themeColor = deltaVal > 0 ? C.green : deltaVal < 0 ? C.red : C.amber;
+                        const isCrashed = it.trend === TRENDS.CRASHED;
+                        const themeColor = isCrashed ? C.red : (deltaVal > 0 ? C.green : deltaVal < 0 ? C.red : C.amber);
                         
                         return (
                           <div 
                             key={it.id} 
                             onClick={() => setExpandedItemId(isExpanded ? null : it.id)}
-                            className="flex flex-col px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129] cursor-pointer" 
+                            className={`flex flex-col px-4 py-3.5 transition-all duration-150 hover:bg-[#1E2129] cursor-pointer`} 
                             style={{ borderTop: idx === 0 ? "none" : `1px solid ${C.line}` }}
                           >
                             <div className="flex items-center gap-3 w-full">
                               {editingId === it.id ? (
-                                <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center gap-2 w-full flex-wrap" onClick={(e) => e.stopPropagation()}>
                                   <input 
                                     value={editDraft.name} 
                                     onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
-                                    className="flex-1 min-w-0 rounded-lg px-3 py-1.5 text-sm outline-none text-[#EDEEF0]"
+                                    className="flex-1 min-w-[120px] rounded-lg px-3 py-1.5 text-sm outline-none text-[#EDEEF0]"
                                     style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }} 
                                   />
                                   <input 
                                     value={editDraft.value} 
                                     onChange={(e) => setEditDraft((d) => ({ ...d, value: e.target.value }))} 
                                     inputMode="numeric"
-                                    className="w-28 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom text-[#EDEEF0]"
+                                    className="w-24 rounded-lg px-3 py-1.5 text-sm outline-none font-mono-custom text-[#EDEEF0]"
                                     style={{ background: C.panel2, color: C.text, border: `1px solid ${C.line}` }}
                                     onKeyDown={(e) => e.key === "Enter" && handleSaveEdit(it.id)} 
                                   />
+                                  
+                                  {/* Custom Trend Dropdown selector */}
+                                  <select
+                                    value={editDraft.trend}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, trend: e.target.value }))}
+                                    className="rounded-lg px-2 py-1.5 text-xs font-semibold uppercase bg-[#1F232B] text-emerald-400 border border-[#2A2F39] outline-none"
+                                  >
+                                    <option value={TRENDS.STABLE}>Stable</option>
+                                    <option value={TRENDS.RISING}>Rising</option>
+                                    <option value={TRENDS.DROPPING}>Dropping</option>
+                                    <option value={TRENDS.RISING_SHOULD_DROP}>Rising, Should Drop</option>
+                                    <option value={TRENDS.DROPPING_SHOULD_RISE}>Dropping, Should Rise</option>
+                                    <option value={TRENDS.CRASHED}>Crashed</option>
+                                  </select>
+
                                   <button 
                                     onClick={() => handleSaveEdit(it.id)} 
                                     className="hover:scale-110 active:scale-90 transition-all p-1.5 text-emerald-400" 
@@ -1005,17 +1192,18 @@
                               ) : (
                                 <>
                                   <div className="flex-1 min-w-0">
-                                    <div className="truncate text-sm font-semibold flex items-center gap-2" style={{ color: C.text }}>
-                                      {it.name}
-                                      {isExpanded && (
-                                        <span className="text-[9px] font-mono-custom px-1.5 py-0.5 rounded bg-white/5 font-normal text-white/50">
-                                          INSIGHT OPEN
-                                        </span>
-                                      )}
+                                    <div className="truncate text-sm font-semibold flex items-center gap-2 flex-wrap" style={{ color: C.text }}>
+                                      <span>{it.name}</span>
+                                      {renderTrendBadge(it.trend)}
                                     </div>
                                     {it.value !== it.startingValue && (
-                                      <div className="text-[10px] mt-0.5 font-mono-custom" style={{ color: C.faint }}>
-                                        Started @ {fmt(it.startingValue)}
+                                      <div className="text-[10px] mt-0.5 font-mono-custom flex items-center gap-1" style={{ color: C.faint }}>
+                                        <span>Started @ {fmt(it.startingValue)}</span>
+                                        {isCrashed && (
+                                          <span className="text-red-400 font-bold flex items-center gap-0.5">
+                                            <Icon name="AlertTriangle" size={10} /> Value Over-Inflated!
+                                          </span>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -1078,13 +1266,13 @@
                   </div>
                   <span className="text-[11px] text-center" style={{ color: C.faint }}>
                     {autoRunning 
-                      ? `Simulator generating smart multi-item trade proofs every ${AUTO_INTERVAL_MS / 1000} seconds.` 
+                      ? `Simulator generating smart multi-item trend-balanced proofs every ${AUTO_INTERVAL_MS / 1000} seconds.` 
                       : `Simulation systems operational. Activate Loop Engine to automatically build live proof records.`
                     }
                   </span>
                 </div>
 
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 animate-fadeIn">
                   <div className="flex justify-between items-center px-1">
                     <span className="text-xs font-bold uppercase tracking-widest text-emerald-400/80">
                       Chronological History (Showing 5 Oldest Proofs)
@@ -1137,7 +1325,7 @@
                           </div>
                         </div>
 
-                        <p className="text-xs" style={{ color: C.muted }}>{summary}</p>
+                        <p className="text-xs animate-fadeIn" style={{ color: C.muted }}>{summary}</p>
                         
                         {missing && (
                           <p className="text-[10px] italic" style={{ color: C.faint }}>
@@ -1156,7 +1344,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                  className="w-full text-left truncate bg-white/5 px-2 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
@@ -1174,7 +1362,7 @@
                                   key={it.id} 
                                   onClick={() => handlePetClick(it.name)}
                                   style={{ color: C.muted }} 
-                                  className="w-full text-left truncate bg-white/5 px-2.5 py-1.5 rounded-xl transition-colors hover:bg-emerald-500/10 hover:text-white flex justify-between items-center"
+                                  className="w-full text-left truncate bg-white/5 px-2 py-1.5 rounded-xl hover:bg-emerald-500/10 hover:text-white flex justify-between items-center transition-all"
                                 >
                                   <span className="truncate">{it.name}</span> 
                                   <span className="font-mono-custom text-[10px] text-white/40 ml-1 shrink-0">{fmt(it.value)}</span>
